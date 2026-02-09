@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, Navigate } from 'react-router-dom'
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
+import { useAuth } from '../context/AuthContext'
 import { getGenres, getTitles, type CatalogParams } from '../api/catalog'
 import TitleCard from '../components/TitleCard'
 
@@ -9,6 +10,7 @@ type TitleType = 'all' | 'movie' | 'series'
 export default function BrowsePage() {
   const { genre: genreParam } = useParams<{ genre?: string }>()
   const navigate = useNavigate()
+  const { profile } = useAuth()
   const [selectedGenre, setSelectedGenre] = useState(genreParam || '')
   const [titleType, setTitleType] = useState<TitleType>('all')
 
@@ -24,11 +26,12 @@ export default function BrowsePage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['catalog', selectedGenre, titleType],
+    queryKey: ['catalog', selectedGenre, titleType, profile?.id],
     queryFn: ({ pageParam }) => {
       const params: CatalogParams = {
         page: pageParam,
         page_size: 24,
+        profile_id: profile!.id,
       }
       if (selectedGenre) params.genre = selectedGenre
       if (titleType !== 'all') params.type = titleType
@@ -39,9 +42,14 @@ export default function BrowsePage() {
       const totalPages = Math.ceil(lastPage.total / lastPage.page_size)
       return lastPage.page < totalPages ? lastPage.page + 1 : undefined
     },
+    enabled: !!profile,
   })
 
   const allItems = data?.pages.flatMap(p => p.items) ?? []
+
+  if (!profile) {
+    return <Navigate to="/profiles" replace />
+  }
 
   const handleGenreChange = (slug: string) => {
     setSelectedGenre(slug)

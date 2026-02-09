@@ -15,15 +15,19 @@ export default function TitleDetailPage() {
   const queryClient = useQueryClient()
   const [selectedSeason, setSelectedSeason] = useState(1)
 
-  const { data: title, isLoading } = useQuery({
-    queryKey: ['title', id],
-    queryFn: () => getTitleById(id!),
+  const { data: title, isLoading, error: titleError } = useQuery({
+    queryKey: ['title', id, profile?.id],
+    queryFn: () => getTitleById(id!, profile?.id),
     enabled: !!id,
+    retry: (failureCount, error: any) => {
+      if (error?.status === 403) return false
+      return failureCount < 3
+    },
   })
 
   const { data: similar } = useQuery({
-    queryKey: ['similar', id],
-    queryFn: () => getSimilarTitles(id!),
+    queryKey: ['similar', id, profile?.id],
+    queryFn: () => getSimilarTitles(id!, profile?.id),
     enabled: !!id,
   })
 
@@ -58,6 +62,26 @@ export default function TitleDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['rating', profile?.id, id] })
     },
   })
+
+  const isRestricted = (titleError as any)?.status === 403
+
+  if (isRestricted) {
+    return (
+      <div className="min-h-screen pt-14 flex flex-col items-center justify-center px-4">
+        <svg className="w-20 h-20 text-gray-600 mb-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+        </svg>
+        <h2 className="text-xl font-semibold text-white mb-2">Content not available for this profile</h2>
+        <p className="text-gray-400 text-sm mb-6">This title is restricted based on the current profile's parental rating.</p>
+        <button
+          onClick={() => navigate(-1)}
+          className="px-6 py-2.5 bg-surface-overlay text-white rounded-lg hover:bg-white/10 transition-colors"
+        >
+          Go Back
+        </button>
+      </div>
+    )
+  }
 
   if (isLoading || !title) {
     return (

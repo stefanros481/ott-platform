@@ -14,6 +14,7 @@ from app.schemas.catalog import (
     TitleListItem,
 )
 from app.services import catalog_service
+from app.services.rating_utils import resolve_profile_rating
 
 router = APIRouter()
 
@@ -88,8 +89,12 @@ async def list_titles(
     genre: str | None = Query(None, description="Filter by genre slug"),
     type: str | None = Query(None, description="Filter by title type (movie/series)"),
     q: str | None = Query(None, description="Free-text search"),
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
 ) -> PaginatedResponse[TitleListItem]:
     """Browse the content catalog with optional filtering and search."""
+    allowed_ratings = None
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
     titles, total = await catalog_service.get_titles(
         db,
         page=page,
@@ -97,6 +102,7 @@ async def list_titles(
         genre_slug=genre,
         title_type=type,
         search_query=q,
+        allowed_ratings=allowed_ratings,
     )
     return PaginatedResponse(
         items=[_title_to_list_item(t) for t in titles],
@@ -107,7 +113,12 @@ async def list_titles(
 
 
 @router.get("/titles/{title_id}", response_model=TitleDetail)
-async def get_title(title_id: uuid.UUID, user: CurrentUser, db: DB) -> TitleDetail:
+async def get_title(
+    title_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+) -> TitleDetail:
     """Retrieve full detail for a single title."""
     title = await catalog_service.get_title_detail(db, title_id)
     if not title:
@@ -115,6 +126,13 @@ async def get_title(title_id: uuid.UUID, user: CurrentUser, db: DB) -> TitleDeta
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Title not found",
         )
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
+        if allowed_ratings is not None and title.age_rating not in allowed_ratings:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Content not available for this profile",
+            )
     return _title_to_detail(title)
 
 
@@ -126,9 +144,16 @@ async def list_genres(user: CurrentUser, db: DB) -> list[GenreResponse]:
 
 
 @router.get("/featured", response_model=list[TitleListItem])
-async def featured_titles(user: CurrentUser, db: DB) -> list[TitleListItem]:
+async def featured_titles(
+    user: CurrentUser,
+    db: DB,
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+) -> list[TitleListItem]:
     """Return featured titles for the hero banner carousel."""
-    titles = await catalog_service.get_featured_titles(db)
+    allowed_ratings = None
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
+    titles = await catalog_service.get_featured_titles(db, allowed_ratings=allowed_ratings)
     return [_title_to_list_item(t) for t in titles]
 
 
@@ -139,13 +164,18 @@ async def search_titles(
     q: str = Query(..., min_length=1, description="Search query"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
 ) -> PaginatedResponse[TitleListItem]:
     """Search titles by keyword (alias for /titles?q=)."""
+    allowed_ratings = None
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
     titles, total = await catalog_service.get_titles(
         db,
         page=page,
         page_size=page_size,
         search_query=q,
+        allowed_ratings=allowed_ratings,
     )
     return PaginatedResponse(
         items=[_title_to_list_item(t) for t in titles],

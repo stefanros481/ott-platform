@@ -41,6 +41,8 @@ async def get_similar_titles(
     db: AsyncSession,
     title_id: uuid.UUID,
     limit: int = 12,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
     """Return titles most similar to *title_id* using pgvector cosine distance.
 
@@ -64,23 +66,24 @@ async def get_similar_titles(
     # 2. Nearest-neighbour query.
     # Convert numpy floats to plain Python floats for pgvector compatibility.
     vec_str = "[" + ",".join(str(float(v)) for v in source_vector) + "]"
+    age_filter = ""
+    bind_kw: dict = dict(query_vec=vec_str, source_id=title_id, lim=limit)
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = tuple(allowed_ratings)
     result = await db.execute(
         text(
-            """
+            f"""
             SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
                    t.synopsis_short, t.release_year, t.age_rating,
                    1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
             FROM content_embeddings ce
             JOIN titles t ON t.id = ce.title_id
-            WHERE ce.title_id != :source_id
+            WHERE ce.title_id != :source_id {age_filter}
             ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
             LIMIT :lim
             """
-        ).bindparams(
-            query_vec=vec_str,
-            source_id=title_id,
-            lim=limit,
-        )
+        ).bindparams(**bind_kw)
     )
 
     return [
@@ -103,6 +106,8 @@ async def get_for_you_rail(
     db: AsyncSession,
     profile_id: uuid.UUID,
     limit: int = 20,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
     """Build a 'For You' rail by averaging the profile's interaction embeddings.
 
@@ -148,6 +153,12 @@ async def get_for_you_rail(
     # Convert to plain float string for pgvector compatibility.
     vec_str = "[" + ",".join(str(float(v)) for v in centroid) + "]"
 
+    age_filter = ""
+    bind_kw: dict = dict(query_vec=vec_str, lim=limit)
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = tuple(allowed_ratings)
+
     result = await db.execute(
         text(
             f"""
@@ -156,14 +167,11 @@ async def get_for_you_rail(
                    1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
             FROM content_embeddings ce
             JOIN titles t ON t.id = ce.title_id
-            WHERE ce.title_id NOT IN ({exclusion_list})
+            WHERE ce.title_id NOT IN ({exclusion_list}) {age_filter}
             ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
             LIMIT :lim
             """
-        ).bindparams(
-            query_vec=vec_str,
-            lim=limit,
-        )
+        ).bindparams(**bind_kw)
     )
 
     return [
@@ -186,21 +194,28 @@ async def _continue_watching_rail(
     db: AsyncSession,
     profile_id: uuid.UUID,
     limit: int = 20,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
     """Fetch bookmarks that are not completed, most recent first."""
+    age_filter = ""
+    bind_kw: dict = dict(pid=profile_id, lim=limit)
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = tuple(allowed_ratings)
     result = await db.execute(
         text(
-            """
+            f"""
             SELECT b.content_id AS id, t.title, t.title_type, t.poster_url,
                    t.landscape_url, t.synopsis_short, t.release_year, t.age_rating,
                    b.position_seconds, b.duration_seconds
             FROM bookmarks b
             JOIN titles t ON t.id = b.content_id
-            WHERE b.profile_id = :pid AND b.completed = false
+            WHERE b.profile_id = :pid AND b.completed = false {age_filter}
             ORDER BY b.updated_at DESC
             LIMIT :lim
             """
-        ).bindparams(pid=profile_id, lim=limit)
+        ).bindparams(**bind_kw)
     )
     return [
         {
@@ -218,28 +233,39 @@ async def _continue_watching_rail(
     ]
 
 
-async def _new_releases_rail(db: AsyncSession, limit: int = 20) -> list[dict]:
-    result = await db.execute(
-        select(Title).order_by(Title.created_at.desc()).limit(limit)
-    )
+async def _new_releases_rail(
+    db: AsyncSession, limit: int = 20, *, allowed_ratings: list[str] | None = None
+) -> list[dict]:
+    query = select(Title).order_by(Title.created_at.desc()).limit(limit)
+    if allowed_ratings is not None:
+        query = query.where(Title.age_rating.in_(allowed_ratings))
+    result = await db.execute(query)
     return [_title_to_rail_item(t) for t in result.scalars().all()]
 
 
-async def _trending_rail(db: AsyncSession, limit: int = 20) -> list[dict]:
+async def _trending_rail(
+    db: AsyncSession, limit: int = 20, *, allowed_ratings: list[str] | None = None
+) -> list[dict]:
     """Titles with the most bookmarks (proxy for popularity)."""
+    age_filter = ""
+    bind_kw: dict = dict(lim=limit)
+    if allowed_ratings is not None:
+        age_filter = "WHERE t.age_rating IN :allowed"
+        bind_kw["allowed"] = tuple(allowed_ratings)
     result = await db.execute(
         text(
-            """
+            f"""
             SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
                    t.synopsis_short, t.release_year, t.age_rating,
                    COUNT(b.id) AS bm_count
             FROM titles t
             LEFT JOIN bookmarks b ON b.content_id = t.id
+            {age_filter}
             GROUP BY t.id
             ORDER BY bm_count DESC
             LIMIT :lim
             """
-        ).bindparams(lim=limit)
+        ).bindparams(**bind_kw)
     )
     return [
         {
@@ -261,6 +287,8 @@ async def _top_genre_rail(
     db: AsyncSession,
     profile_id: uuid.UUID,
     limit: int = 20,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> dict | None:
     """Build a rail for the profile's most-watched genre.
 
@@ -289,18 +317,23 @@ async def _top_genre_rail(
     genre_id: uuid.UUID = row.id
 
     # Fetch titles in that genre.
+    age_filter = ""
+    bind_kw: dict = dict(gid=genre_id, lim=limit)
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = tuple(allowed_ratings)
     titles_q = await db.execute(
         text(
-            """
+            f"""
             SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
                    t.synopsis_short, t.release_year, t.age_rating
             FROM titles t
             JOIN title_genres tg ON tg.title_id = t.id
-            WHERE tg.genre_id = :gid
+            WHERE tg.genre_id = :gid {age_filter}
             ORDER BY t.created_at DESC
             LIMIT :lim
             """
-        ).bindparams(gid=genre_id, lim=limit)
+        ).bindparams(**bind_kw)
     )
     items = [
         {
@@ -333,32 +366,34 @@ async def _top_genre_rail(
 async def get_home_rails(
     db: AsyncSession,
     profile_id: uuid.UUID,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
     """Assemble the full set of home-screen rails for a profile."""
     rails: list[dict] = []
 
     # 1. Continue Watching
-    cw_items = await _continue_watching_rail(db, profile_id)
+    cw_items = await _continue_watching_rail(db, profile_id, allowed_ratings=allowed_ratings)
     if cw_items:
         rails.append({"name": "Continue Watching", "rail_type": "continue_watching", "items": cw_items})
 
     # 2. For You (only if there is viewing history)
-    fy_items = await get_for_you_rail(db, profile_id)
+    fy_items = await get_for_you_rail(db, profile_id, allowed_ratings=allowed_ratings)
     if fy_items:
         rails.append({"name": "For You", "rail_type": "for_you", "items": fy_items})
 
     # 3. New Releases
-    nr_items = await _new_releases_rail(db)
+    nr_items = await _new_releases_rail(db, allowed_ratings=allowed_ratings)
     if nr_items:
         rails.append({"name": "New Releases", "rail_type": "new_releases", "items": nr_items})
 
     # 4. Trending
-    tr_items = await _trending_rail(db)
+    tr_items = await _trending_rail(db, allowed_ratings=allowed_ratings)
     if tr_items:
         rails.append({"name": "Trending", "rail_type": "trending", "items": tr_items})
 
     # 5. Top genre rail
-    genre_rail = await _top_genre_rail(db, profile_id)
+    genre_rail = await _top_genre_rail(db, profile_id, allowed_ratings=allowed_ratings)
     if genre_rail:
         rails.append(genre_rail)
 
@@ -369,6 +404,8 @@ async def get_post_play(
     db: AsyncSession,
     title_id: uuid.UUID,
     limit: int = 8,
+    *,
+    allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
     """Post-play suggestions -- reuses the similarity engine."""
-    return await get_similar_titles(db, title_id, limit=limit)
+    return await get_similar_titles(db, title_id, limit=limit, allowed_ratings=allowed_ratings)

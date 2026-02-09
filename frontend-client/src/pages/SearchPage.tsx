@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '../context/AuthContext'
 import { getTitles } from '../api/catalog'
 import TitleCard from '../components/TitleCard'
 
@@ -8,6 +9,7 @@ export default function SearchPage() {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const navigate = useNavigate()
+  const { profile } = useAuth()
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Autofocus
@@ -24,12 +26,16 @@ export default function SearchPage() {
   }, [query])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['search', debouncedQuery],
-    queryFn: () => getTitles({ q: debouncedQuery, page_size: 30 }),
-    enabled: debouncedQuery.length >= 2,
+    queryKey: ['search', debouncedQuery, profile?.id],
+    queryFn: () => getTitles({ q: debouncedQuery, page_size: 30, profile_id: profile!.id }),
+    enabled: debouncedQuery.length >= 2 && !!profile,
   })
 
   const results = data?.items ?? []
+
+  if (!profile) {
+    return <Navigate to="/profiles" replace />
+  }
 
   return (
     <div className="min-h-screen pt-14 pb-12 px-4 sm:px-6 lg:px-8">
