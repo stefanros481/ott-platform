@@ -1,0 +1,27 @@
+[project]
+name = "ott-platform-poc"
+version = "0.1.0"
+description = "AI-Native OTT Streaming Platform - Proof of Concept"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "pgvector>=0.3",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "redis>=5.2",
+    "sentence-transformers>=3.3",
+    "httpx>=0.28",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

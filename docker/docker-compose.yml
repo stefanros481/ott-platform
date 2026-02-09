@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ott_platform
+      POSTGRES_USER: ott_user
+      POSTGRES_PASSWORD: ott_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ott_user -d ott_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ott_user:ott_password@postgres:5432/ott_platform
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: poc-secret-key-change-in-production
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRY_MINUTES: "60"
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:5174"
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend/app:/app/app
+      - huggingface_cache:/root/.cache/huggingface
+
+  frontend-client:
+    build:
+      context: ../frontend-client
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ../frontend-client/src:/app/src
+
+  frontend-admin:
+    build:
+      context: ../frontend-admin
+      dockerfile: Dockerfile
+    ports:
+      - "5174:5174"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ../frontend-admin/src:/app/src
+
+volumes:
+  postgres_data:
+  redis_data:
+  huggingface_cache:
