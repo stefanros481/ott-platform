@@ -12,8 +12,8 @@ export default function HomePage() {
   const navigate = useNavigate()
 
   const { data: featured, isLoading: featuredLoading } = useQuery({
-    queryKey: ['featured'],
-    queryFn: getFeatured,
+    queryKey: ['featured', profile?.id],
+    queryFn: () => getFeatured(profile!.id),
     enabled: !!profile,
   })
 

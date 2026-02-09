@@ -26,6 +26,7 @@ export function getHomeRecommendations(profileId: string): Promise<HomeRecommend
   return apiFetch<HomeRecommendations>(`/recommendations/home?profile_id=${profileId}`)
 }
 
-export function getSimilarTitles(titleId: string): Promise<RecommendationItem[]> {
-  return apiFetch<RecommendationItem[]>(`/recommendations/similar/${titleId}`)
+export function getSimilarTitles(titleId: string, profileId?: string): Promise<RecommendationItem[]> {
+  const qs = profileId ? `?profile_id=${profileId}` : ''
+  return apiFetch<RecommendationItem[]>(`/recommendations/similar/${titleId}${qs}`)
 }

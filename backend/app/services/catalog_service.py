@@ -17,6 +17,7 @@ async def get_titles(
     genre_slug: str | None = None,
     title_type: str | None = None,
     search_query: str | None = None,
+    allowed_ratings: list[str] | None = None,
 ) -> tuple[list[Title], int]:
     """Return a paginated, optionally filtered list of titles.
 
@@ -29,6 +30,10 @@ async def get_titles(
 
     # Count query shares the same filters but no pagination / eager loads.
     count_q = select(func.count()).select_from(Title)
+
+    if allowed_ratings is not None:
+        base = base.where(Title.age_rating.in_(allowed_ratings))
+        count_q = count_q.where(Title.age_rating.in_(allowed_ratings))
 
     if genre_slug:
         base = base.join(Title.genres).join(TitleGenre.genre).where(Genre.slug == genre_slug)
@@ -92,7 +97,9 @@ async def get_genres(db: AsyncSession) -> list[Genre]:
     return list(result.scalars().all())
 
 
-async def get_featured_titles(db: AsyncSession) -> list[Title]:
+async def get_featured_titles(
+    db: AsyncSession, *, allowed_ratings: list[str] | None = None
+) -> list[Title]:
     """Return titles flagged as featured (for the hero banner)."""
     query = (
         select(Title)
@@ -102,5 +109,7 @@ async def get_featured_titles(db: AsyncSession) -> list[Title]:
         )
         .order_by(Title.created_at.desc())
     )
+    if allowed_ratings is not None:
+        query = query.where(Title.age_rating.in_(allowed_ratings))
     result = await db.execute(query)
     return list(result.scalars().unique())

@@ -74,6 +74,7 @@ export interface CatalogParams {
   genre?: string
   type?: string
   q?: string
+  profile_id?: string
 }
 
 export function getTitles(params: CatalogParams = {}): Promise<PaginatedTitles> {
@@ -83,19 +84,22 @@ export function getTitles(params: CatalogParams = {}): Promise<PaginatedTitles> 
   if (params.genre) searchParams.set('genre', params.genre)
   if (params.type) searchParams.set('type', params.type)
   if (params.q) searchParams.set('q', params.q)
+  if (params.profile_id) searchParams.set('profile_id', params.profile_id)
 
   const qs = searchParams.toString()
   return apiFetch<PaginatedTitles>(`/catalog/titles${qs ? `?${qs}` : ''}`)
 }
 
-export function getTitleById(id: string): Promise<TitleDetail> {
-  return apiFetch<TitleDetail>(`/catalog/titles/${id}`)
+export function getTitleById(id: string, profileId?: string): Promise<TitleDetail> {
+  const qs = profileId ? `?profile_id=${profileId}` : ''
+  return apiFetch<TitleDetail>(`/catalog/titles/${id}${qs}`)
 }
 
 export function getGenres(): Promise<Genre[]> {
   return apiFetch<Genre[]>('/catalog/genres')
 }
 
-export function getFeatured(): Promise<TitleListItem[]> {
-  return apiFetch<TitleListItem[]>('/catalog/featured')
+export function getFeatured(profileId?: string): Promise<TitleListItem[]> {
+  const qs = profileId ? `?profile_id=${profileId}` : ''
+  return apiFetch<TitleListItem[]>(`/catalog/featured${qs}`)
 }

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from app.dependencies import DB
 from app.schemas.recommendation import ContentRail, ContentRailItem, HomeResponse
 from app.services import recommendation_service
+from app.services.rating_utils import resolve_profile_rating
 
 router = APIRouter()
 
@@ -21,7 +22,8 @@ async def home_rails(
     Rails include: Continue Watching, For You, New Releases, Trending,
     and a top-genre rail (when viewing history exists).
     """
-    raw_rails = await recommendation_service.get_home_rails(db, profile_id)
+    allowed_ratings = await resolve_profile_rating(db, profile_id)
+    raw_rails = await recommendation_service.get_home_rails(db, profile_id, allowed_ratings=allowed_ratings)
     rails = [
         ContentRail(
             name=r["name"],
@@ -38,9 +40,13 @@ async def similar_titles(
     title_id: uuid.UUID,
     db: DB,
     limit: int = Query(12, ge=1, le=50),
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
 ):
     """Return titles similar to the given title using embedding similarity."""
-    items = await recommendation_service.get_similar_titles(db, title_id, limit=limit)
+    allowed_ratings = None
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
+    items = await recommendation_service.get_similar_titles(db, title_id, limit=limit, allowed_ratings=allowed_ratings)
     return [ContentRailItem(**item) for item in items]
 
 
@@ -48,9 +54,10 @@ async def similar_titles(
 async def post_play(
     title_id: uuid.UUID,
     db: DB,
-    profile_id: uuid.UUID | None = Query(None, description="Active profile (reserved for future personalisation)"),
+    profile_id: uuid.UUID = Query(..., description="Active profile for parental filtering"),
     limit: int = Query(8, ge=1, le=20),
 ):
     """Post-play suggestions after finishing a title."""
-    items = await recommendation_service.get_post_play(db, title_id, limit=limit)
+    allowed_ratings = await resolve_profile_rating(db, profile_id)
+    items = await recommendation_service.get_post_play(db, title_id, limit=limit, allowed_ratings=allowed_ratings)
     return [ContentRailItem(**item) for item in items]
