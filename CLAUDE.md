@@ -1343,3 +1343,10 @@ After all agents complete, review the outputs against these criteria:
 - **Monetization:** Adjust SVOD/TVOD/AVOD mix for your business model
 - **Existing Systems:** Add migration/integration requirements for legacy platforms
 - **Model Selection:** Use `claude --model sonnet` for initial generation, `claude --model opus` for review/refinement
+
+## Active Technologies
+- Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query (001-parental-rating-enforcement)
+- PostgreSQL 16 + pgvector (001-parental-rating-enforcement)
+
+## Recent Changes
+- 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query
