@@ -103,3 +103,35 @@ export function getFeatured(profileId?: string): Promise<TitleListItem[]> {
   const qs = profileId ? `?profile_id=${profileId}` : ''
   return apiFetch<TitleListItem[]>(`/catalog/featured${qs}`)
 }
+
+// ── Semantic search ─────────────────────────────────────────────────────────
+
+export interface SearchResultItem extends TitleListItem {
+  match_reason: string
+  match_type: 'keyword' | 'semantic' | 'both'
+  similarity_score: number | null
+}
+
+export interface SemanticSearchResponse {
+  items: SearchResultItem[]
+  total: number
+  query: string
+  mode: string
+}
+
+export interface SemanticSearchParams {
+  q: string
+  mode?: 'keyword' | 'semantic' | 'hybrid'
+  page_size?: number
+  profile_id?: string
+}
+
+export function semanticSearch(params: SemanticSearchParams): Promise<SemanticSearchResponse> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('q', params.q)
+  if (params.mode) searchParams.set('mode', params.mode)
+  if (params.page_size) searchParams.set('page_size', String(params.page_size))
+  if (params.profile_id) searchParams.set('profile_id', params.profile_id)
+
+  return apiFetch<SemanticSearchResponse>(`/catalog/search/semantic?${searchParams.toString()}`)
+}

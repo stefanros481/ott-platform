@@ -4,7 +4,7 @@ import logging
 import uuid
 
 import numpy as np
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.catalog import Genre, Title, TitleGenre
@@ -68,23 +68,26 @@ async def get_similar_titles(
     vec_str = "[" + ",".join(str(float(v)) for v in source_vector) + "]"
     age_filter = ""
     bind_kw: dict = dict(query_vec=vec_str, source_id=title_id, lim=limit)
+    extra_params = []
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
-        bind_kw["allowed"] = tuple(allowed_ratings)
-    result = await db.execute(
-        text(
-            f"""
-            SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
-                   t.synopsis_short, t.release_year, t.age_rating,
-                   1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
-            FROM content_embeddings ce
-            JOIN titles t ON t.id = ce.title_id
-            WHERE ce.title_id != :source_id {age_filter}
-            ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
-            LIMIT :lim
-            """
-        ).bindparams(**bind_kw)
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+    stmt = text(
+        f"""
+        SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
+               t.synopsis_short, t.release_year, t.age_rating,
+               1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
+        FROM content_embeddings ce
+        JOIN titles t ON t.id = ce.title_id
+        WHERE ce.title_id != :source_id {age_filter}
+        ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
+        LIMIT :lim
+        """
     )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw))
 
     return [
         {
@@ -155,24 +158,27 @@ async def get_for_you_rail(
 
     age_filter = ""
     bind_kw: dict = dict(query_vec=vec_str, lim=limit)
+    extra_params = []
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
-        bind_kw["allowed"] = tuple(allowed_ratings)
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
 
-    result = await db.execute(
-        text(
-            f"""
-            SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
-                   t.synopsis_short, t.release_year, t.age_rating,
-                   1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
-            FROM content_embeddings ce
-            JOIN titles t ON t.id = ce.title_id
-            WHERE ce.title_id NOT IN ({exclusion_list}) {age_filter}
-            ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
-            LIMIT :lim
-            """
-        ).bindparams(**bind_kw)
+    stmt = text(
+        f"""
+        SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
+               t.synopsis_short, t.release_year, t.age_rating,
+               1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
+        FROM content_embeddings ce
+        JOIN titles t ON t.id = ce.title_id
+        WHERE ce.title_id NOT IN ({exclusion_list}) {age_filter}
+        ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
+        LIMIT :lim
+        """
     )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw))
 
     return [
         {
@@ -200,23 +206,26 @@ async def _continue_watching_rail(
     """Fetch bookmarks that are not completed, most recent first."""
     age_filter = ""
     bind_kw: dict = dict(pid=profile_id, lim=limit)
+    extra_params = []
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
-        bind_kw["allowed"] = tuple(allowed_ratings)
-    result = await db.execute(
-        text(
-            f"""
-            SELECT b.content_id AS id, t.title, t.title_type, t.poster_url,
-                   t.landscape_url, t.synopsis_short, t.release_year, t.age_rating,
-                   b.position_seconds, b.duration_seconds
-            FROM bookmarks b
-            JOIN titles t ON t.id = b.content_id
-            WHERE b.profile_id = :pid AND b.completed = false {age_filter}
-            ORDER BY b.updated_at DESC
-            LIMIT :lim
-            """
-        ).bindparams(**bind_kw)
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+    stmt = text(
+        f"""
+        SELECT b.content_id AS id, t.title, t.title_type, t.poster_url,
+               t.landscape_url, t.synopsis_short, t.release_year, t.age_rating,
+               b.position_seconds, b.duration_seconds
+        FROM bookmarks b
+        JOIN titles t ON t.id = b.content_id
+        WHERE b.profile_id = :pid AND b.completed = false {age_filter}
+        ORDER BY b.updated_at DESC
+        LIMIT :lim
+        """
     )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw))
     return [
         {
             "id": r.id,
@@ -249,23 +258,27 @@ async def _trending_rail(
     """Titles with the most bookmarks (proxy for popularity)."""
     age_filter = ""
     bind_kw: dict = dict(lim=limit)
+    extra_params = []
     if allowed_ratings is not None:
         age_filter = "WHERE t.age_rating IN :allowed"
-        bind_kw["allowed"] = tuple(allowed_ratings)
-    result = await db.execute(
-        text(
-            f"""
-            SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
-                   t.synopsis_short, t.release_year, t.age_rating,
-                   COUNT(b.id) AS bm_count
-            FROM titles t
-            LEFT JOIN bookmarks b ON b.content_id = t.id
-            {age_filter}
-            GROUP BY t.id
-            ORDER BY bm_count DESC
-            LIMIT :lim
-            """
-        ).bindparams(**bind_kw)
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+    stmt = text(
+        f"""
+        SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
+               t.synopsis_short, t.release_year, t.age_rating,
+               COUNT(b.id) AS bm_count
+        FROM titles t
+        LEFT JOIN bookmarks b ON b.content_id = t.id
+        {age_filter}
+        GROUP BY t.id
+        ORDER BY bm_count DESC
+        LIMIT :lim
+        """
+    )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw)
     )
     return [
         {
@@ -319,22 +332,25 @@ async def _top_genre_rail(
     # Fetch titles in that genre.
     age_filter = ""
     bind_kw: dict = dict(gid=genre_id, lim=limit)
+    extra_params = []
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
-        bind_kw["allowed"] = tuple(allowed_ratings)
-    titles_q = await db.execute(
-        text(
-            f"""
-            SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
-                   t.synopsis_short, t.release_year, t.age_rating
-            FROM titles t
-            JOIN title_genres tg ON tg.title_id = t.id
-            WHERE tg.genre_id = :gid {age_filter}
-            ORDER BY t.created_at DESC
-            LIMIT :lim
-            """
-        ).bindparams(**bind_kw)
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+    stmt = text(
+        f"""
+        SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
+               t.synopsis_short, t.release_year, t.age_rating
+        FROM titles t
+        JOIN title_genres tg ON tg.title_id = t.id
+        WHERE tg.genre_id = :gid {age_filter}
+        ORDER BY t.created_at DESC
+        LIMIT :lim
+        """
     )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    titles_q = await db.execute(stmt.params(**bind_kw))
     items = [
         {
             "id": r.id,

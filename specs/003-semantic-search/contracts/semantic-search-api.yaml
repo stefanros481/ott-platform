@@ -1,0 +1,133 @@
+# OpenAPI fragment — Semantic Search endpoint
+# Mounts under /catalog prefix in the existing FastAPI catalog router
+
+paths:
+  /catalog/search/semantic:
+    get:
+      summary: Hybrid semantic + keyword search
+      description: |
+        Search content using natural language queries. Combines keyword matching
+        (ILIKE on title, synopsis, cast) with vector similarity (pgvector cosine)
+        via Reciprocal Rank Fusion. Returns match explanations per result.
+      operationId: semanticSearch
+      tags: [Catalog]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Search query (natural language supported)
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [keyword, semantic, hybrid]
+            default: hybrid
+          description: "Search mode: keyword (ILIKE only), semantic (vector only), hybrid (both + RRF merge)"
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum number of results to return
+        - name: profile_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Active profile ID for parental rating filtering
+      responses:
+        "200":
+          description: Search results with match explanations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SemanticSearchResponse"
+        "401":
+          description: Authentication required
+
+components:
+  schemas:
+    SearchResultItem:
+      type: object
+      required: [id, title, title_type, match_reason, match_type]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        title_type:
+          type: string
+          enum: [movie, series]
+        synopsis_short:
+          type: string
+          nullable: true
+        release_year:
+          type: integer
+          nullable: true
+        duration_minutes:
+          type: integer
+          nullable: true
+        age_rating:
+          type: string
+          nullable: true
+        poster_url:
+          type: string
+          nullable: true
+        landscape_url:
+          type: string
+          nullable: true
+        is_featured:
+          type: boolean
+          default: false
+        mood_tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        genres:
+          type: array
+          items:
+            type: string
+          default: []
+        match_reason:
+          type: string
+          description: "Human-readable explanation, e.g. 'Title match · Similar themes'"
+        match_type:
+          type: string
+          enum: [keyword, semantic, both]
+          description: Source of the match
+        similarity_score:
+          type: number
+          format: float
+          nullable: true
+          description: "Cosine similarity 0.0–1.0, null for keyword-only matches"
+
+    SemanticSearchResponse:
+      type: object
+      required: [items, total, query, mode]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResultItem"
+        total:
+          type: integer
+          description: Number of results returned
+        query:
+          type: string
+          description: Echo of the search query
+        mode:
+          type: string
+          enum: [keyword, semantic, hybrid]
+          description: Echo of the search mode used
