@@ -329,6 +329,7 @@ async def list_channels(db: DB, user: CurrentUser):
             genre=ch.genre,
             is_hd=ch.is_hd,
             is_favorite=False,
+            hls_live_url=ch.hls_live_url,
         )
         for ch in channels
     ]
@@ -359,6 +360,7 @@ async def create_channel(body: ChannelCreateRequest, db: DB, user: CurrentUser):
         genre=channel.genre,
         is_hd=channel.is_hd,
         is_favorite=False,
+        hls_live_url=channel.hls_live_url,
     )
 
 
@@ -386,6 +388,7 @@ async def update_channel(channel_id: uuid.UUID, body: ChannelUpdateRequest, db: 
         genre=channel.genre,
         is_hd=channel.is_hd,
         is_favorite=False,
+        hls_live_url=channel.hls_live_url,
     )
 
 

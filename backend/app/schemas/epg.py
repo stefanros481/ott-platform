@@ -19,6 +19,7 @@ class ChannelResponse(BaseModel):
     genre: str | None = None
     is_hd: bool = True
     is_favorite: bool = False
+    hls_live_url: str | None = None
 
     model_config = {"from_attributes": True}
 

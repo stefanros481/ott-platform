@@ -136,6 +136,7 @@ export default function PlayerPage() {
       <VideoPlayer
         manifestUrl={manifestUrl}
         title={displayTitle}
+        isLive={type === 'live'}
         onPositionUpdate={handlePositionUpdate}
         onEnded={handleEnded}
         onBack={() => navigate(-1)}

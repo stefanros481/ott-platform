@@ -4,6 +4,7 @@ import shaka from 'shaka-player'
 interface VideoPlayerProps {
   manifestUrl: string
   title: string
+  isLive?: boolean
   onPositionUpdate?: (positionSeconds: number) => void
   startPosition?: number
   onEnded?: () => void
@@ -13,6 +14,7 @@ interface VideoPlayerProps {
 export default function VideoPlayer({
   manifestUrl,
   title,
+  isLive = false,
   onPositionUpdate,
   startPosition,
   onEnded,
@@ -36,7 +38,7 @@ export default function VideoPlayer({
     if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
     controlsTimerRef.current = setTimeout(() => {
       if (isPlaying) setShowControls(false)
-    }, 3000)
+    }, 5000)
   }, [isPlaying])
 
   const handleMouseMove = useCallback(() => {
@@ -62,11 +64,13 @@ export default function VideoPlayer({
       try {
         await player.attach(video)
         await player.load(manifestUrl)
-        if (startPosition && startPosition > 0) {
+        if (!isLive && startPosition && startPosition > 0) {
           video.currentTime = startPosition
         }
+        video.play().catch(() => {})
       } catch (e) {
         const shakaError = e as shaka.util.Error
+        if (shakaError.code === shaka.util.Error.Code.LOAD_INTERRUPTED) return
         if (shakaError.severity === shaka.util.Error.Severity.CRITICAL) {
           setError(`Playback error: ${shakaError.message}`)
         }
@@ -147,6 +151,30 @@ export default function VideoPlayer({
     const video = videoRef.current
     if (!video) return
     video.currentTime = time
+  }
+
+  const rewind10 = () => {
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = Math.max(0, video.currentTime - 10)
+  }
+
+  const forward10 = () => {
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = Math.min(duration, video.currentTime + 10)
+  }
+
+  const startOver = () => {
+    const video = videoRef.current
+    if (!video) return
+    if (isLive && playerRef.current) {
+      const seekRange = playerRef.current.seekRange()
+      video.currentTime = seekRange.start
+    } else {
+      video.currentTime = 0
+    }
+    if (video.paused) video.play()
   }
 
   const toggleMute = () => {
@@ -234,10 +262,10 @@ export default function VideoPlayer({
         </div>
 
         {/* Center play/pause */}
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <button
             onClick={togglePlay}
-            className="w-16 h-16 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 transition-colors"
+            className="w-16 h-16 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 transition-colors pointer-events-auto"
           >
             {isPlaying ? (
               <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -253,40 +281,84 @@ export default function VideoPlayer({
 
         {/* Bottom controls */}
         <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-          {/* Seek bar */}
-          <div className="group/seek relative mb-3">
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              value={currentTime}
-              onChange={e => seek(Number(e.target.value))}
-              className="w-full h-1 group-hover/seek:h-2 bg-white/30 rounded-full appearance-none cursor-pointer transition-all
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
-                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500
-                [&::-webkit-slider-thumb]:opacity-0 [&::-webkit-slider-thumb]:group-hover/seek:opacity-100
-                [&::-webkit-slider-thumb]:transition-opacity"
-              style={{
-                background: `linear-gradient(to right, #6366f1 ${(currentTime / (duration || 1)) * 100}%, rgba(255,255,255,0.3) 0%)`,
-              }}
-            />
-          </div>
+          {/* Seek bar — hidden for live */}
+          {!isLive && (
+            <div className="group/seek relative mb-3">
+              <input
+                type="range"
+                min={0}
+                max={duration || 0}
+                value={currentTime}
+                onChange={e => seek(Number(e.target.value))}
+                className="w-full h-1 group-hover/seek:h-2 bg-white/30 rounded-full appearance-none cursor-pointer transition-all
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500
+                  [&::-webkit-slider-thumb]:opacity-0 [&::-webkit-slider-thumb]:group-hover/seek:opacity-100
+                  [&::-webkit-slider-thumb]:transition-opacity"
+                style={{
+                  background: `linear-gradient(to right, #6366f1 ${(currentTime / (duration || 1)) * 100}%, rgba(255,255,255,0.3) 0%)`,
+                }}
+              />
+            </div>
+          )}
 
           <div className="flex items-center justify-between">
+            {/* Transport controls */}
             <div className="flex items-center gap-3">
+              {/* Rewind 10s */}
+              <button onClick={rewind10} className="text-white hover:text-primary-400 transition-colors" title="Rewind 10 seconds">
+                <svg className="w-7 h-7" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+                  <text x="12" y="16" fontSize="8" fontWeight="bold" fontFamily="Arial,sans-serif" textAnchor="middle">10</text>
+                </svg>
+              </button>
+
               {/* Play/Pause */}
-              <button onClick={togglePlay} className="text-white hover:text-primary-400 transition-colors">
+              <button onClick={togglePlay} className="text-white hover:text-primary-400 transition-colors" title={isPlaying ? 'Pause' : 'Play'}>
                 {isPlaying ? (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
                   </svg>
                 ) : (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M8 5v14l11-7z" />
                   </svg>
                 )}
               </button>
 
+              {/* Forward 10s */}
+              <button onClick={forward10} className="text-white hover:text-primary-400 transition-colors" title="Forward 10 seconds">
+                <svg className="w-7 h-7" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
+                  <text x="12" y="16" fontSize="8" fontWeight="bold" fontFamily="Arial,sans-serif" textAnchor="middle">10</text>
+                </svg>
+              </button>
+
+              {/* Start Over */}
+              <button onClick={startOver} className="text-white hover:text-primary-400 transition-colors" title="Start over">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 9c1.5-3.5 5-6 9-6 5.523 0 10 4.477 10 10s-4.477 10-10 10c-4.5 0-8.27-2.943-9.543-7" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Time / Live badge */}
+            <div className="flex items-center">
+              {isLive ? (
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-red-400">LIVE</span>
+                </span>
+              ) : (
+                <span className="text-sm text-gray-300 tabular-nums">
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </span>
+              )}
+            </div>
+
+            {/* Utility controls */}
+            <div className="flex items-center gap-3">
               {/* Volume */}
               <div className="flex items-center gap-1 group/vol">
                 <button onClick={toggleMute} className="text-white hover:text-primary-400 transition-colors">
@@ -313,24 +385,19 @@ export default function VideoPlayer({
                 />
               </div>
 
-              {/* Time */}
-              <span className="text-sm text-gray-300 tabular-nums">
-                {formatTime(currentTime)} / {formatTime(duration)}
-              </span>
+              {/* Fullscreen */}
+              <button onClick={toggleFullscreen} className="text-white hover:text-primary-400 transition-colors">
+                {isFullscreen ? (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                  </svg>
+                )}
+              </button>
             </div>
-
-            {/* Fullscreen */}
-            <button onClick={toggleFullscreen} className="text-white hover:text-primary-400 transition-colors">
-              {isFullscreen ? (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-                </svg>
-              )}
-            </button>
           </div>
         </div>
       </div>
