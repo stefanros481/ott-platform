@@ -10,10 +10,11 @@ from app.schemas.catalog import (
     GenreResponse,
     PaginatedResponse,
     SeasonResponse,
+    SemanticSearchResponse,
     TitleDetail,
     TitleListItem,
 )
-from app.services import catalog_service
+from app.services import catalog_service, search_service
 from app.services.rating_utils import resolve_profile_rating
 
 router = APIRouter()
@@ -182,4 +183,32 @@ async def search_titles(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/search/semantic", response_model=SemanticSearchResponse)
+async def semantic_search(
+    user: CurrentUser,
+    db: DB,
+    q: str = Query(..., min_length=1, description="Search query (natural language supported)"),
+    mode: str = Query("hybrid", pattern="^(keyword|semantic|hybrid)$", description="Search mode"),
+    page_size: int = Query(20, ge=1, le=100, description="Max results"),
+    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+) -> SemanticSearchResponse:
+    """Hybrid semantic + keyword search with match explanations."""
+    allowed_ratings = None
+    if profile_id is not None:
+        allowed_ratings = await resolve_profile_rating(db, profile_id)
+    results = await search_service.hybrid_search(
+        db,
+        query_text=q,
+        mode=mode,
+        allowed_ratings=allowed_ratings,
+        limit=page_size,
+    )
+    return SemanticSearchResponse(
+        items=results,
+        total=len(results),
+        query=q,
+        mode=mode,
     )

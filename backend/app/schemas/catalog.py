@@ -106,3 +106,35 @@ class PaginatedResponse(BaseModel, Generic[T]):
     total: int
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)
+
+
+# ── Semantic search schemas ──────────────────────────────────────────────────
+
+
+class SearchResultItem(BaseModel):
+    """A content title enriched with search match metadata."""
+
+    id: uuid.UUID
+    title: str
+    title_type: str
+    synopsis_short: str | None = None
+    release_year: int | None = None
+    duration_minutes: int | None = None
+    age_rating: str | None = None
+    poster_url: str | None = None
+    landscape_url: str | None = None
+    is_featured: bool = False
+    mood_tags: list[str] | None = None
+    genres: list[str] = []
+    match_reason: str
+    match_type: str
+    similarity_score: float | None = None
+
+
+class SemanticSearchResponse(BaseModel):
+    """Response wrapper for the semantic search endpoint."""
+
+    items: list[SearchResultItem]
+    total: int
+    query: str
+    mode: str
