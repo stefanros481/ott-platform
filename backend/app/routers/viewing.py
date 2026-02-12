@@ -1,20 +1,23 @@
 """Viewing router -- bookmarks (continue-watching), ratings, watchlist."""
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, delete, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import DB, CurrentUser
 from app.models.viewing import Bookmark, Rating, WatchlistItem
 from app.schemas.viewing import (
     BookmarkResponse,
     BookmarkUpdate,
+    ContinueWatchingItem,
     RatingRequest,
     RatingResponse,
     WatchlistItemResponse,
 )
+from app.services import bookmark_service
+from app.services.recommendation_service import compute_resumption_scores
 
 router = APIRouter()
 
@@ -24,40 +27,86 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@router.get("/continue-watching", response_model=list[BookmarkResponse])
+@router.get("/continue-watching", response_model=list[ContinueWatchingItem])
 async def continue_watching(
     db: DB,
     user: CurrentUser,
     profile_id: uuid.UUID = Query(..., description="Active profile"),
+    device_type: Literal["tv", "mobile", "tablet", "web"] = Query("web", description="Client device type"),
+    hour_of_day: int | None = Query(None, ge=0, le=23, description="Client local hour (0-23)"),
+    limit: int = Query(20, ge=1, le=20, description="Max items to return"),
 ):
-    """Return the continue-watching list for a profile (incomplete bookmarks, most recent first)."""
-    result = await db.execute(
-        text(
-            """
-            SELECT b.id, b.content_type, b.content_id, b.position_seconds,
-                   b.duration_seconds, b.completed, b.updated_at,
-                   t.title AS title_name, t.poster_url
-            FROM bookmarks b
-            LEFT JOIN titles t ON t.id = b.content_id
-            WHERE b.profile_id = :pid AND b.completed = false
-            ORDER BY b.updated_at DESC
-            """
-        ).bindparams(pid=profile_id)
+    """Return the Continue Watching rail: active bookmarks with progress, title info, and next episode."""
+    items = await bookmark_service.get_active_bookmarks(db, profile_id, limit=limit)
+
+    # AI scoring (US3) — sort by resumption likelihood, fall back to recency
+    scores = await compute_resumption_scores(
+        db, items, device_type=device_type, hour_of_day=hour_of_day,
     )
-    rows = result.fetchall()
-    return [
-        BookmarkResponse(
-            id=r.id,
-            content_type=r.content_type,
-            content_id=r.content_id,
-            position_seconds=r.position_seconds,
-            duration_seconds=r.duration_seconds,
-            completed=r.completed,
-            updated_at=r.updated_at,
-            title_info={"title": r.title_name, "poster_url": r.poster_url},
-        )
-        for r in rows
-    ]
+    if scores:
+        for item in items:
+            item.resumption_score = scores.get(str(item.id))
+        items.sort(key=lambda x: x.resumption_score or 0.0, reverse=True)
+
+    return items
+
+
+@router.get("/continue-watching/paused", response_model=list[ContinueWatchingItem])
+async def paused_bookmarks(
+    db: DB,
+    user: CurrentUser,
+    profile_id: uuid.UUID = Query(..., description="Active profile"),
+):
+    """Return dismissed + stale bookmarks for the Paused section."""
+    return await bookmark_service.get_paused_bookmarks(db, profile_id)
+
+
+@router.post("/bookmarks/{bookmark_id}/dismiss", response_model=BookmarkResponse)
+async def dismiss_bookmark(
+    bookmark_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    profile_id: uuid.UUID = Query(..., description="Active profile"),
+):
+    """Dismiss a bookmark from Continue Watching (moves to Paused)."""
+    bookmark = await bookmark_service.dismiss_bookmark(db, bookmark_id, profile_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found or doesn't belong to profile")
+    return BookmarkResponse(
+        id=bookmark.id,
+        content_type=bookmark.content_type,
+        content_id=bookmark.content_id,
+        position_seconds=bookmark.position_seconds,
+        duration_seconds=bookmark.duration_seconds,
+        completed=bookmark.completed,
+        dismissed_at=bookmark.dismissed_at,
+        updated_at=bookmark.updated_at,
+        title_info=None,
+    )
+
+
+@router.post("/bookmarks/{bookmark_id}/restore", response_model=BookmarkResponse)
+async def restore_bookmark(
+    bookmark_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    profile_id: uuid.UUID = Query(..., description="Active profile"),
+):
+    """Restore a dismissed/paused bookmark back to Continue Watching."""
+    bookmark = await bookmark_service.restore_bookmark(db, bookmark_id, profile_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found or doesn't belong to profile")
+    return BookmarkResponse(
+        id=bookmark.id,
+        content_type=bookmark.content_type,
+        content_id=bookmark.content_id,
+        position_seconds=bookmark.position_seconds,
+        duration_seconds=bookmark.duration_seconds,
+        completed=bookmark.completed,
+        dismissed_at=bookmark.dismissed_at,
+        updated_at=bookmark.updated_at,
+        title_info=None,
+    )
 
 
 @router.put("/bookmarks", response_model=BookmarkResponse)
@@ -67,38 +116,15 @@ async def update_bookmark(
     user: CurrentUser,
     profile_id: uuid.UUID = Query(..., description="Active profile"),
 ):
-    """Create or update a playback bookmark (upsert by profile + content_id)."""
-    result = await db.execute(
-        select(Bookmark).where(
-            and_(
-                Bookmark.profile_id == profile_id,
-                Bookmark.content_id == body.content_id,
-            )
-        )
+    """Create or update a playback bookmark (heartbeat). Auto-completes at 95% or final 2 min."""
+    bookmark = await bookmark_service.upsert_bookmark(
+        db,
+        profile_id=profile_id,
+        content_type=body.content_type,
+        content_id=body.content_id,
+        position_seconds=body.position_seconds,
+        duration_seconds=body.duration_seconds,
     )
-    bookmark = result.scalar_one_or_none()
-
-    # Mark completed when position reaches 95 % of duration.
-    completed = body.position_seconds >= (body.duration_seconds * 0.95)
-
-    if bookmark is None:
-        bookmark = Bookmark(
-            profile_id=profile_id,
-            content_type=body.content_type,
-            content_id=body.content_id,
-            position_seconds=body.position_seconds,
-            duration_seconds=body.duration_seconds,
-            completed=completed,
-        )
-        db.add(bookmark)
-    else:
-        bookmark.position_seconds = body.position_seconds
-        bookmark.duration_seconds = body.duration_seconds
-        bookmark.completed = completed
-
-    await db.commit()
-    await db.refresh(bookmark)
-
     return BookmarkResponse(
         id=bookmark.id,
         content_type=bookmark.content_type,
@@ -106,6 +132,7 @@ async def update_bookmark(
         position_seconds=bookmark.position_seconds,
         duration_seconds=bookmark.duration_seconds,
         completed=bookmark.completed,
+        dismissed_at=bookmark.dismissed_at,
         updated_at=bookmark.updated_at,
         title_info=None,
     )

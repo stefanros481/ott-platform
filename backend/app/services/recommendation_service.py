@@ -1,7 +1,9 @@
 """Service layer for content recommendations backed by pgvector similarity search."""
 
 import logging
+import math
 import uuid
+from datetime import datetime, timezone
 
 import numpy as np
 from sqlalchemy import bindparam, func, select, text
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.catalog import Genre, Title, TitleGenre
 from app.models.embedding import ContentEmbedding
 from app.models.viewing import Bookmark, Rating
+from app.schemas.viewing import ContinueWatchingItem
 
 logger = logging.getLogger(__name__)
 
@@ -373,6 +376,124 @@ async def _top_genre_rail(
         "rail_type": "genre",
         "items": items,
     }
+
+
+# ---------------------------------------------------------------------------
+# Resumption scoring (US3 / US4)
+# ---------------------------------------------------------------------------
+
+
+async def compute_resumption_scores(
+    db: AsyncSession,
+    bookmarks: list[ContinueWatchingItem],
+    device_type: str = "web",
+    hour_of_day: int | None = None,
+) -> dict[str, float]:
+    """Score bookmarks by predicted resumption likelihood.
+
+    Returns a mapping of ``str(bookmark.id)`` to a score between 0.0 and 1.0.
+    An empty dict signals the caller should fall back to recency ordering.
+    """
+    if not bookmarks:
+        return {}
+
+    try:
+        now = datetime.now(timezone.utc)
+        scores: dict[str, float] = {}
+
+        # Pre-compute series momentum: for each title that the bookmark's
+        # episode belongs to, count recently completed bookmarks in the same
+        # series.  Join path: episodes -> seasons -> titles.
+        episode_ids = [
+            str(b.content_id) for b in bookmarks if b.content_type == "episode"
+        ]
+        series_completed_counts: dict[str, int] = {}
+        if episode_ids:
+            id_list = ", ".join(f"'{eid}'" for eid in episode_ids)
+            result = await db.execute(
+                text(
+                    f"""
+                    SELECT e_target.id AS episode_id,
+                           COUNT(b2.id) AS completed_count
+                    FROM episodes e_target
+                    JOIN seasons s ON s.id = e_target.season_id
+                    LEFT JOIN episodes e_same ON e_same.season_id IN (
+                        SELECT s2.id FROM seasons s2 WHERE s2.title_id = s.title_id
+                    )
+                    LEFT JOIN bookmarks b2 ON b2.content_id = e_same.id
+                        AND b2.completed = true
+                        AND b2.updated_at > NOW() - INTERVAL '30 days'
+                    WHERE e_target.id IN ({id_list})
+                    GROUP BY e_target.id
+                    """
+                )
+            )
+            for row in result.fetchall():
+                series_completed_counts[str(row.episode_id)] = int(row.completed_count)
+
+        for b in bookmarks:
+            # Recency score: exponential decay with ~5-day half-life
+            days_since = (now - b.updated_at).total_seconds() / 86400.0
+            recency_score = math.exp(-days_since / 7.0)
+
+            # Completion score: peak at 20-80% progress
+            progress = b.progress_percent
+            completion_score = max(0.0, min(1.0, 1.0 - abs(progress - 50.0) / 50.0))
+
+            # Series momentum score
+            if b.content_type == "episode":
+                cc = series_completed_counts.get(str(b.content_id), 0)
+                # Cap at 5 for normalisation
+                series_momentum_score = min(cc, 5) / 5.0
+            else:
+                series_momentum_score = 0.5
+
+            # Time affinity score (US4) — context-aware when device_type
+            # and hour_of_day are provided
+            use_time_affinity = device_type is not None and hour_of_day is not None
+            if use_time_affinity:
+                remaining_seconds = max(0, b.duration_seconds - b.position_seconds)
+                remaining_minutes = remaining_seconds / 60.0
+
+                if device_type == "mobile" and 6 <= hour_of_day <= 10:
+                    # Morning mobile: boost short remaining content (< 30 min)
+                    time_affinity_score = 1.0 - min(remaining_minutes, 60.0) / 60.0
+                elif device_type == "tv" and 19 <= hour_of_day <= 23:
+                    # Evening TV: boost long remaining content (> 60 min)
+                    time_affinity_score = min(remaining_minutes, 120.0) / 120.0
+                else:
+                    time_affinity_score = 0.5
+
+                # 4-weight model
+                w_recency = 0.3
+                w_completion = 0.2
+                w_momentum = 0.25
+                w_time = 0.25
+
+                score = (
+                    w_recency * recency_score
+                    + w_completion * completion_score
+                    + w_momentum * series_momentum_score
+                    + w_time * time_affinity_score
+                )
+            else:
+                # 3-weight model (no time affinity)
+                w_recency = 0.4
+                w_completion = 0.25
+                w_momentum = 0.35
+
+                score = (
+                    w_recency * recency_score
+                    + w_completion * completion_score
+                    + w_momentum * series_momentum_score
+                )
+
+            scores[str(b.id)] = round(min(1.0, max(0.0, score)), 4)
+
+        return scores
+    except Exception:
+        logger.exception("Failed to compute resumption scores")
+        return {}
 
 
 # ---------------------------------------------------------------------------

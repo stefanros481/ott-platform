@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getTitleById } from '../api/catalog'
-import { saveBookmark } from '../api/viewing'
+import { useBookmarkSync } from '../hooks/useBookmarkSync'
 import VideoPlayer from '../components/VideoPlayer'
 
 export default function PlayerPage() {
@@ -70,17 +70,20 @@ export default function PlayerPage() {
 
   const { manifestUrl, displayTitle, contentType, contentId, nextEpisodeId } = playbackInfo
 
+  const durationSeconds = title?.duration_minutes ? title.duration_minutes * 60 : 0
+
+  const { saveNow } = useBookmarkSync({
+    profileId: profile?.id ?? '',
+    contentType,
+    contentId,
+    durationSeconds,
+    isPlaying: true,
+  })
+
   const handlePositionUpdate = useCallback((positionSeconds: number) => {
     if (!title || !profile) return
-    saveBookmark(profile.id, {
-      content_type: contentType,
-      content_id: contentId,
-      position_seconds: positionSeconds,
-      duration_seconds: title.duration_minutes ? title.duration_minutes * 60 : 0,
-    }).catch(() => {
-      // Silent fail for bookmark saves
-    })
-  }, [title, profile, contentType, contentId])
+    saveNow(positionSeconds)
+  }, [title, profile, saveNow])
 
   const handleEnded = useCallback(() => {
     if (nextEpisodeId) {

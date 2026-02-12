@@ -1,0 +1,311 @@
+openapi: 3.1.0
+info:
+  title: Continue Watching & Bookmarks API
+  version: 1.0.0
+  description: API extensions for Continue Watching rail, bookmark heartbeats, dismiss, and Paused section.
+
+paths:
+  /viewing/continue-watching:
+    get:
+      operationId: getContinueWatching
+      summary: Get Continue Watching rail for a profile
+      description: |
+        Returns in-progress bookmarks sorted by AI resumption score (with recency fallback).
+        Excludes completed, dismissed, and stale (30+ days inactive) bookmarks.
+        Includes series "next episode" metadata and progress percentage.
+      parameters:
+        - name: profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: device_type
+          in: query
+          required: false
+          description: Client device type for context-aware sorting
+          schema:
+            type: string
+            enum: [tv, mobile, tablet, web]
+            default: web
+        - name: hour_of_day
+          in: query
+          required: false
+          description: Client's local hour (0-23) for time-aware sorting
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 23
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 20
+      responses:
+        "200":
+          description: Continue Watching items sorted by resumption likelihood
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContinueWatchingItem"
+
+  /viewing/continue-watching/paused:
+    get:
+      operationId: getPausedBookmarks
+      summary: Get Paused (archived) bookmarks
+      description: |
+        Returns bookmarks that were either manually dismissed or auto-archived
+        after 30 days of inactivity. Ordered by most recently dismissed/stale first.
+      parameters:
+        - name: profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Paused bookmark items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContinueWatchingItem"
+
+  /viewing/bookmarks:
+    put:
+      operationId: updateBookmark
+      summary: Create or update a playback bookmark (heartbeat)
+      description: |
+        Upsert a bookmark by (profile_id, content_id). Called periodically during playback
+        (every 30 seconds) and on pause/stop. Automatically marks content as completed
+        when position reaches 95% of duration or within final 2 minutes.
+      parameters:
+        - name: profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookmarkUpdate"
+      responses:
+        "200":
+          description: Updated bookmark
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookmarkResponse"
+
+  /viewing/bookmarks/{bookmark_id}/dismiss:
+    post:
+      operationId: dismissBookmark
+      summary: Manually dismiss a bookmark from Continue Watching
+      description: |
+        Moves a bookmark to the Paused section by setting dismissed_at.
+        Bookmark position is preserved for potential future resumption.
+      parameters:
+        - name: bookmark_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Bookmark dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookmarkResponse"
+        "404":
+          description: Bookmark not found or doesn't belong to profile
+
+  /viewing/bookmarks/{bookmark_id}/restore:
+    post:
+      operationId: restoreBookmark
+      summary: Restore a dismissed/paused bookmark to Continue Watching
+      description: |
+        Clears dismissed_at and updates updated_at to now, returning
+        the bookmark to the active Continue Watching rail.
+      parameters:
+        - name: bookmark_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Bookmark restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookmarkResponse"
+        "404":
+          description: Bookmark not found or doesn't belong to profile
+
+components:
+  schemas:
+    ContinueWatchingItem:
+      type: object
+      required:
+        - id
+        - content_type
+        - content_id
+        - position_seconds
+        - duration_seconds
+        - progress_percent
+        - updated_at
+        - title_info
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Bookmark ID
+        content_type:
+          type: string
+          enum: [movie, episode]
+        content_id:
+          type: string
+          format: uuid
+        position_seconds:
+          type: integer
+        duration_seconds:
+          type: integer
+        progress_percent:
+          type: number
+          format: float
+          description: Computed position/duration * 100, clamped 0-100
+        completed:
+          type: boolean
+        dismissed_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+        resumption_score:
+          type: number
+          format: float
+          nullable: true
+          description: AI-predicted resumption likelihood (0.0-1.0), null when AI unavailable
+        title_info:
+          $ref: "#/components/schemas/TitleInfo"
+        next_episode:
+          $ref: "#/components/schemas/NextEpisodeInfo"
+          nullable: true
+          description: Present only for series with a next unwatched episode
+
+    TitleInfo:
+      type: object
+      properties:
+        title:
+          type: string
+        poster_url:
+          type: string
+          nullable: true
+        landscape_url:
+          type: string
+          nullable: true
+        title_type:
+          type: string
+          enum: [movie, series]
+        age_rating:
+          type: string
+          nullable: true
+        episode_title:
+          type: string
+          nullable: true
+          description: Episode-specific title (for episodes only)
+        season_number:
+          type: integer
+          nullable: true
+        episode_number:
+          type: integer
+          nullable: true
+
+    NextEpisodeInfo:
+      type: object
+      description: Metadata about the next unwatched episode in a series
+      properties:
+        episode_id:
+          type: string
+          format: uuid
+        season_number:
+          type: integer
+        episode_number:
+          type: integer
+        episode_title:
+          type: string
+
+    BookmarkUpdate:
+      type: object
+      required:
+        - content_type
+        - content_id
+        - position_seconds
+        - duration_seconds
+      properties:
+        content_type:
+          type: string
+          enum: [movie, episode]
+        content_id:
+          type: string
+          format: uuid
+        position_seconds:
+          type: integer
+          minimum: 0
+        duration_seconds:
+          type: integer
+          minimum: 1
+
+    BookmarkResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        content_type:
+          type: string
+        content_id:
+          type: string
+          format: uuid
+        position_seconds:
+          type: integer
+        duration_seconds:
+          type: integer
+        completed:
+          type: boolean
+        dismissed_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+        title_info:
+          type: object
+          nullable: true

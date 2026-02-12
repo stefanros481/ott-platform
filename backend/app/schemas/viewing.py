@@ -41,10 +41,50 @@ class BookmarkResponse(BaseModel):
     position_seconds: int
     duration_seconds: int
     completed: bool
+    dismissed_at: datetime | None = None
     updated_at: datetime
-    title_info: dict | None = None  # {"title": ..., "poster_url": ...}
+    title_info: dict | None = None
 
     model_config = {"from_attributes": True}
+
+
+class TitleInfo(BaseModel):
+    """Title metadata attached to a Continue Watching item."""
+
+    title: str
+    poster_url: str | None = None
+    landscape_url: str | None = None
+    title_type: str  # 'movie' or 'series'
+    age_rating: str | None = None
+    episode_title: str | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+
+
+class NextEpisodeInfo(BaseModel):
+    """Metadata about the next unwatched episode in a series."""
+
+    episode_id: uuid.UUID
+    season_number: int
+    episode_number: int
+    episode_title: str
+
+
+class ContinueWatchingItem(BaseModel):
+    """A single item in the Continue Watching rail."""
+
+    id: uuid.UUID
+    content_type: str
+    content_id: uuid.UUID
+    position_seconds: int
+    duration_seconds: int
+    progress_percent: float
+    completed: bool = False
+    dismissed_at: datetime | None = None
+    updated_at: datetime
+    resumption_score: float | None = None
+    title_info: TitleInfo
+    next_episode: NextEpisodeInfo | None = None
 
 
 class RatingResponse(BaseModel):

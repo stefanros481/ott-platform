@@ -95,7 +95,7 @@ export default function VideoPlayer({
       if (video && !video.paused) {
         onPositionUpdate(Math.floor(video.currentTime))
       }
-    }, 10000)
+    }, 30000)
     return () => {
       if (positionTimerRef.current) clearInterval(positionTimerRef.current)
     }

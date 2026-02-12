@@ -48,19 +48,19 @@ async def main(include_embeddings: bool = False) -> None:
     print("=" * 60)
 
     # 1. Check connectivity
-    print("\n[1/5] Checking database connection...")
+    print("\n[1/6] Checking database connection...")
     if not await _check_db_connection():
         print("ERROR: Cannot connect to the database. Check DATABASE_URL.")
         sys.exit(1)
     print("  Connected.")
 
     # 2. Ensure tables exist
-    print("\n[2/5] Ensuring tables exist...")
+    print("\n[2/6] Ensuring tables exist...")
     await _ensure_tables()
     print("  Tables ready.")
 
     # 3. Seed catalog
-    print("\n[3/5] Seeding catalog (genres, titles, cast, seasons, episodes)...")
+    print("\n[3/6] Seeding catalog (genres, titles, cast, seasons, episodes)...")
     start = time.monotonic()
     from app.seed.seed_catalog import seed_catalog
 
@@ -70,7 +70,7 @@ async def main(include_embeddings: bool = False) -> None:
     print(f"  Done in {elapsed:.1f}s.")
 
     # 4. Seed EPG
-    print("\n[4/5] Seeding EPG (channels, schedule entries)...")
+    print("\n[4/6] Seeding EPG (channels, schedule entries)...")
     start = time.monotonic()
     from app.seed.seed_epg import seed_epg
 
@@ -80,12 +80,22 @@ async def main(include_embeddings: bool = False) -> None:
     print(f"  Done in {elapsed:.1f}s.")
 
     # 5. Seed users (depends on catalog + EPG)
-    print("\n[5/5] Seeding users (packages, users, profiles, entitlements)...")
+    print("\n[5/6] Seeding users (packages, users, profiles, entitlements)...")
     start = time.monotonic()
     from app.seed.seed_users import seed_users
 
     async with async_session_factory() as session:
         user_counts = await seed_users(session)
+    elapsed = time.monotonic() - start
+    print(f"  Done in {elapsed:.1f}s.")
+
+    # 6. Seed bookmarks (depends on users + catalog)
+    print("\n[6/6] Seeding bookmarks (continue watching demo data)...")
+    start = time.monotonic()
+    from app.seed.seed_bookmarks import seed_bookmarks
+
+    async with async_session_factory() as session:
+        bookmark_counts = await seed_bookmarks(session)
     elapsed = time.monotonic() - start
     print(f"  Done in {elapsed:.1f}s.")
 
@@ -102,7 +112,7 @@ async def main(include_embeddings: bool = False) -> None:
         print(f"  Done in {elapsed:.1f}s.")
 
     # Summary
-    all_counts = {**catalog_counts, **epg_counts, **user_counts, **embed_counts}
+    all_counts = {**catalog_counts, **epg_counts, **user_counts, **bookmark_counts, **embed_counts}
     print("\n" + "=" * 60)
     print("  SEED SUMMARY")
     print("=" * 60)

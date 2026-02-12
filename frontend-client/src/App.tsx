@@ -11,6 +11,7 @@ import PlayerPage from './pages/PlayerPage'
 import EpgPage from './pages/EpgPage'
 import SearchPage from './pages/SearchPage'
 import WatchlistPage from './pages/WatchlistPage'
+import PausedPage from './pages/PausedPage'
 
 /** Layout that includes the top navigation bar and page content below it. */
 function AppLayout() {
@@ -65,6 +66,7 @@ function App() {
           <Route path="epg" element={<EpgPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="watchlist" element={<WatchlistPage />} />
+          <Route path="paused" element={<PausedPage />} />
         </Route>
 
         {/* Catch-all */}
