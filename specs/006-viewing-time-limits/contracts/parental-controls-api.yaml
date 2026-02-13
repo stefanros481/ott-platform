@@ -1,0 +1,401 @@
+openapi: 3.1.0
+info:
+  title: Parental Controls API
+  version: 1.0.0
+  description: PIN management, viewing time configuration, viewing history, and weekly reports.
+
+paths:
+  /parental-controls/pin:
+    post:
+      operationId: createPin
+      summary: Create or update account PIN
+      description: Set a 4-digit PIN for the account. Requires JWT auth. If a PIN already exists, the current PIN must be provided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_pin]
+              properties:
+                current_pin:
+                  type: string
+                  pattern: "^[0-9]{4}$"
+                  description: Required if a PIN already exists
+                new_pin:
+                  type: string
+                  pattern: "^[0-9]{4}$"
+      responses:
+        "200":
+          description: PIN created or updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "PIN set successfully"
+        "401":
+          description: Unauthorized (no valid JWT)
+        "403":
+          description: Current PIN incorrect or account locked out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinError"
+
+  /parental-controls/pin/verify:
+    post:
+      operationId: verifyPin
+      summary: Verify account PIN
+      description: Verify the PIN to access parental controls. Returns a short-lived parental session token. Lockout after 5 failed attempts for 30 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pin]
+              properties:
+                pin:
+                  type: string
+                  pattern: "^[0-9]{4}$"
+      responses:
+        "200":
+          description: PIN verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified:
+                    type: boolean
+                    example: true
+                  remaining_attempts:
+                    type: integer
+                    example: 5
+        "403":
+          description: PIN incorrect or locked out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinError"
+
+  /parental-controls/pin/reset:
+    post:
+      operationId: resetPin
+      summary: Reset forgotten PIN using account password
+      description: Parent enters their account password to reset the PIN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, new_pin]
+              properties:
+                password:
+                  type: string
+                  description: Account password for verification
+                new_pin:
+                  type: string
+                  pattern: "^[0-9]{4}$"
+      responses:
+        "200":
+          description: PIN reset successfully
+        "403":
+          description: Password incorrect
+
+  /parental-controls/profiles/{profile_id}/viewing-time:
+    get:
+      operationId: getViewingTimeConfig
+      summary: Get viewing time configuration for a child profile
+      description: Returns the current viewing time limits, reset time, and educational exemption setting. Requires PIN verification.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Configuration retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewingTimeConfig"
+        "404":
+          description: Profile not found or not a child profile
+
+    put:
+      operationId: updateViewingTimeConfig
+      summary: Update viewing time configuration for a child profile
+      description: Set or update limits, reset time, and educational exemption. Changes propagate within 5 seconds. Requires PIN verification.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ViewingTimeConfigUpdate"
+      responses:
+        "200":
+          description: Configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewingTimeConfig"
+        "400":
+          description: Validation error (invalid increments, range)
+        "404":
+          description: Profile not found or not a child profile
+
+  /parental-controls/profiles/{profile_id}/viewing-time/grant:
+    post:
+      operationId: grantExtraTime
+      summary: Grant extra viewing time from parent's device
+      description: Parent grants extra time remotely. No PIN re-entry needed (already authenticated via profile session). Requires PIN verification for on-device grants.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes:
+                  type: integer
+                  nullable: true
+                  description: "Minutes to add. null = Unlimited for today."
+                  enum: [15, 30, 60, null]
+                pin:
+                  type: string
+                  pattern: "^[0-9]{4}$"
+                  description: Required for on-device grants (from lock screen). Omit for remote grants from parent's own device.
+      responses:
+        "200":
+          description: Extra time granted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  remaining_minutes:
+                    type: number
+                    description: Updated remaining minutes. null if unlimited.
+                    nullable: true
+                  granted_minutes:
+                    type: integer
+                    nullable: true
+        "403":
+          description: PIN incorrect (for on-device grants)
+        "404":
+          description: Profile not found
+
+  /parental-controls/profiles/{profile_id}/history:
+    get:
+      operationId: getViewingHistory
+      summary: Get detailed viewing history for a child profile
+      description: Returns chronological viewing log grouped by day. Requires PIN verification.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Start date (default 30 days ago)
+        - name: to_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: End date (default today)
+      responses:
+        "200":
+          description: Viewing history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewingHistory"
+
+  /parental-controls/weekly-report:
+    get:
+      operationId: getWeeklyReport
+      summary: Get weekly viewing time report for all child profiles
+      description: Computed on-demand. Covers the last 7 days. Requires PIN verification.
+      responses:
+        "200":
+          description: Weekly report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeeklyReport"
+
+components:
+  schemas:
+    PinError:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Incorrect PIN"
+        remaining_attempts:
+          type: integer
+          example: 3
+        locked_until:
+          type: string
+          format: date-time
+          nullable: true
+
+    ViewingTimeConfig:
+      type: object
+      properties:
+        profile_id:
+          type: string
+          format: uuid
+        profile_name:
+          type: string
+        weekday_limit_minutes:
+          type: integer
+          nullable: true
+          description: "null = Unlimited"
+        weekend_limit_minutes:
+          type: integer
+          nullable: true
+        reset_hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        educational_exempt:
+          type: boolean
+        timezone:
+          type: string
+
+    ViewingTimeConfigUpdate:
+      type: object
+      properties:
+        weekday_limit_minutes:
+          type: integer
+          nullable: true
+          minimum: 15
+          maximum: 480
+          description: "Must be multiple of 15. null = Unlimited."
+        weekend_limit_minutes:
+          type: integer
+          nullable: true
+          minimum: 15
+          maximum: 480
+        reset_hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        educational_exempt:
+          type: boolean
+        timezone:
+          type: string
+
+    ViewingHistory:
+      type: object
+      properties:
+        profile_id:
+          type: string
+          format: uuid
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              total_counted_minutes:
+                type: number
+              total_educational_minutes:
+                type: number
+              sessions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                    started_at:
+                      type: string
+                      format: date-time
+                    duration_minutes:
+                      type: number
+                    device_type:
+                      type: string
+                    is_educational:
+                      type: boolean
+
+    WeeklyReport:
+      type: object
+      properties:
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        profiles:
+          type: array
+          items:
+            type: object
+            properties:
+              profile_id:
+                type: string
+                format: uuid
+              profile_name:
+                type: string
+              daily_totals:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    date:
+                      type: string
+                      format: date
+                    counted_minutes:
+                      type: number
+                    educational_minutes:
+                      type: number
+                    limit_minutes:
+                      type: integer
+                      nullable: true
+              average_daily_minutes:
+                type: number
+              average_limit_usage_percent:
+                type: number
+              most_watched:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                    total_minutes:
+                      type: number

@@ -49,6 +49,17 @@ export default function Navbar() {
               </svg>
             </Link>
 
+            <Link
+              to="/parental-controls"
+              className="p-2 text-gray-400 hover:text-white transition-colors"
+              aria-label="Parental Controls"
+              title="Parental Controls"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.25-8.25-3.286Zm0 13.036h.008v.008H12v-.008Z" />
+              </svg>
+            </Link>
+
             {profile && (
               <Link to="/profiles" className="flex items-center gap-2 text-sm text-gray-300 hover:text-white transition-colors">
                 <div className="w-7 h-7 rounded bg-primary-700 flex items-center justify-center text-xs font-bold uppercase">

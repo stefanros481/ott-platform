@@ -5,6 +5,9 @@ import { useAuth } from '../context/AuthContext'
 import { getTitleById } from '../api/catalog'
 import { getBookmarkByContent } from '../api/viewing'
 import { useBookmarkSync } from '../hooks/useBookmarkSync'
+import { useViewingTime, useHeartbeat } from '../hooks/useViewingTime'
+import LockScreen from '../components/LockScreen'
+import ViewingTimeWarning from '../components/ViewingTimeWarning'
 import VideoPlayer from '../components/VideoPlayer'
 
 function formatTime(seconds: number): string {
@@ -111,6 +114,45 @@ export default function PlayerPage() {
     isPlaying: playerIsPlaying,
   })
 
+  // Viewing time balance polling — drives warnings and lock screen
+  const {
+    isLocked: balanceLocked,
+    isLoading: balanceLoading,
+    showWarning15,
+    showWarning5,
+    dismissWarning15,
+    dismissWarning5,
+    balance,
+    refetchBalance,
+  } = useViewingTime(profile?.id ?? '')
+
+  const [heartbeatBlocked, setHeartbeatBlocked] = useState(false)
+  const isLocked = balanceLocked || heartbeatBlocked
+
+  // Viewing time heartbeat — sends 30s heartbeats to track kids profile usage.
+  // Uses the parent title ID (not episode ID) so the backend can look up is_educational.
+  // Stops sending when locked so no more time is counted.
+  const { enforcement, isEducational } = useHeartbeat(
+    profile?.id ?? '',
+    title?.id ?? '',
+    undefined,
+    playerIsPlaying && !isLocked,
+  )
+
+  // Lock immediately when heartbeat returns blocked (faster than balance polling)
+  useEffect(() => {
+    if (enforcement === 'blocked') {
+      setHeartbeatBlocked(true)
+    } else if (enforcement === 'allowed') {
+      setHeartbeatBlocked(false)
+    }
+  }, [enforcement])
+
+  const handleUnlocked = useCallback(() => {
+    setHeartbeatBlocked(false)
+    refetchBalance()
+  }, [refetchBalance])
+
   const handlePositionUpdate = useCallback((positionSeconds: number) => {
     if (!title || !profile) return
     saveNow(positionSeconds)
@@ -157,7 +199,7 @@ export default function PlayerPage() {
     return () => clearTimeout(timer)
   }, [nextEpisodeCountdown, nextEpisodeId, navigate])
 
-  if (isLoading || bookmarkLoading) {
+  if (isLoading || bookmarkLoading || balanceLoading) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -183,6 +225,19 @@ export default function PlayerPage() {
             Go Back
           </button>
         </div>
+      </div>
+    )
+  }
+
+  // Lock screen takes priority — block playback entry when daily limit is exceeded
+  if (isLocked) {
+    return (
+      <div className="fixed inset-0 bg-black z-50">
+        <LockScreen
+          profileId={profile?.id ?? ''}
+          nextResetAt={balance?.next_reset_at ?? null}
+          onUnlocked={handleUnlocked}
+        />
       </div>
     )
   }
@@ -245,6 +300,16 @@ export default function PlayerPage() {
         startPosition={startPosition}
       />
 
+      {/* Viewing time warnings (15min / 5min / educational) */}
+      <ViewingTimeWarning
+        showWarning15={showWarning15}
+        showWarning5={showWarning5}
+        onDismiss15={dismissWarning15}
+        onDismiss5={dismissWarning5}
+        remainingMinutes={balance?.remaining_minutes}
+        isEducational={isEducational}
+      />
+
       {/* Next episode toast */}
       {nextEpisodeCountdown !== null && nextEpisodeCountdown > 0 && (
         <div className="absolute bottom-20 right-6 z-60 bg-surface-raised border border-white/10 rounded-lg p-4 shadow-2xl">
@@ -265,6 +330,15 @@ export default function PlayerPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Lock screen — shown when daily viewing time is exceeded */}
+      {isLocked && (
+        <LockScreen
+          profileId={profile?.id ?? ''}
+          nextResetAt={balance?.next_reset_at ?? null}
+          onUnlocked={handleUnlocked}
+        />
       )}
     </div>
   )

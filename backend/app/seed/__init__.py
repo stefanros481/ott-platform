@@ -4,12 +4,14 @@ from app.seed.seed_catalog import seed_catalog
 from app.seed.seed_embeddings import seed_embeddings
 from app.seed.seed_epg import seed_epg
 from app.seed.seed_users import seed_users
+from app.seed.seed_viewing_time import seed_viewing_time
 
 __all__ = [
     "seed_catalog",
     "seed_epg",
     "seed_users",
     "seed_embeddings",
+    "seed_viewing_time",
 ]
 
 
@@ -32,5 +34,9 @@ async def run_all_seeds(session, *, include_embeddings: bool = False) -> dict[st
     if include_embeddings:
         embed_counts = await seed_embeddings(session)
         summary.update(embed_counts)
+
+    # Viewing time seed must run after users + catalog
+    viewing_time_counts = await seed_viewing_time(session)
+    summary.update(viewing_time_counts)
 
     return summary

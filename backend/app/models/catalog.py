@@ -34,6 +34,7 @@ class Title(Base):
     logo_url: Mapped[str | None] = mapped_column(String(500))
     hls_manifest_url: Mapped[str | None] = mapped_column(String(500))
     is_featured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_educational: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     mood_tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     theme_tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     ai_description: Mapped[str | None] = mapped_column(Text)
