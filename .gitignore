@@ -20,3 +20,6 @@ docker/redis/data/
 
 # IDE
 .idea/
+
+# Playwright
+.playwright-mcp/

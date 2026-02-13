@@ -96,10 +96,18 @@ export function restoreBookmark(bookmarkId: string, profileId: string): Promise<
   })
 }
 
+export function getBookmarkByContent(profileId: string, contentId: string): Promise<BookmarkResponse | null> {
+  return apiFetch<BookmarkResponse | null>(`/viewing/bookmarks/by-content/${contentId}?profile_id=${profileId}`)
+}
+
 export function saveBookmark(profileId: string, payload: BookmarkPayload): Promise<BookmarkResponse> {
   return apiFetch<BookmarkResponse>(`/viewing/bookmarks?profile_id=${profileId}`, {
     method: 'PUT',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      position_seconds: Math.floor(payload.position_seconds),
+      duration_seconds: Math.floor(payload.duration_seconds),
+    }),
   })
 }
 

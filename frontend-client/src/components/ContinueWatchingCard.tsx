@@ -66,10 +66,10 @@ export default function ContinueWatchingCard({
         )}
 
         {/* Progress bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+        <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/20">
           <div
-            className="h-full bg-primary-500 rounded-r-full"
-            style={{ width: `${Math.min(item.progress_percent, 100)}%` }}
+            className="h-full bg-primary-500"
+            style={{ width: `${Math.max(Math.min(item.progress_percent, 100), 2)}%` }}
           />
         </div>
       </div>

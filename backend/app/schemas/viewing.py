@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # -- Request schemas ----------------------------------------------------------
@@ -16,6 +16,14 @@ class BookmarkUpdate(BaseModel):
     content_id: uuid.UUID
     position_seconds: int = Field(ge=0)
     duration_seconds: int = Field(ge=1)
+
+    @field_validator("position_seconds", "duration_seconds", mode="before")
+    @classmethod
+    def truncate_floats(cls, v: object) -> object:
+        """Accept float values from clients and truncate to int."""
+        if isinstance(v, float):
+            return int(v)
+        return v
 
 
 class RatingRequest(BaseModel):

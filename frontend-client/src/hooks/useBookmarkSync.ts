@@ -26,13 +26,14 @@ export function useBookmarkSync({
 }: UseBookmarkSyncParams): { saveNow: (positionSeconds: number) => void } {
   const positionRef = useRef(0)
   const intervalRef = useRef<ReturnType<typeof setInterval>>()
+  const doSaveRef = useRef<(positionSeconds: number) => void>(() => {})
 
   const buildPayload = useCallback(
     (positionSeconds: number): BookmarkPayload => ({
       content_type: contentType,
       content_id: contentId,
-      position_seconds: positionSeconds,
-      duration_seconds: durationSeconds,
+      position_seconds: Math.floor(positionSeconds),
+      duration_seconds: Math.floor(durationSeconds),
     }),
     [contentType, contentId, durationSeconds],
   )
@@ -53,12 +54,18 @@ export function useBookmarkSync({
 
   const doSave = useCallback(
     (positionSeconds: number) => {
+      if (durationSeconds <= 0) return // API requires duration >= 1
       saveBookmark(profileId, buildPayload(positionSeconds)).catch(() => {
         persistToLocalStorage(positionSeconds)
       })
     },
-    [profileId, buildPayload, persistToLocalStorage],
+    [profileId, durationSeconds, buildPayload, persistToLocalStorage],
   )
+
+  // Keep ref in sync so unmount cleanup always uses the latest doSave
+  useEffect(() => {
+    doSaveRef.current = doSave
+  }, [doSave])
 
   // Flush pending bookmarks from localStorage on mount
   useEffect(() => {
@@ -107,12 +114,11 @@ export function useBookmarkSync({
     }
   }, [isPlaying, doSave])
 
-  // Save final position on unmount
+  // Save final position on unmount — use ref to avoid stale closure
   useEffect(() => {
     return () => {
-      doSave(positionRef.current)
+      doSaveRef.current(positionRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const saveNow = useCallback(

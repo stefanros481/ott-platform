@@ -6,6 +6,8 @@ interface VideoPlayerProps {
   title: string
   isLive?: boolean
   onPositionUpdate?: (positionSeconds: number) => void
+  onDurationChange?: (durationSeconds: number) => void
+  onPlayStateChange?: (playing: boolean) => void
   startPosition?: number
   onEnded?: () => void
   onBack?: () => void
@@ -16,6 +18,8 @@ export default function VideoPlayer({
   title,
   isLive = false,
   onPositionUpdate,
+  onDurationChange: onDurationChangeProp,
+  onPlayStateChange,
   startPosition,
   onEnded,
   onBack,
@@ -23,6 +27,7 @@ export default function VideoPlayer({
   const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<shaka.Player | null>(null)
   const positionTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const onPositionUpdateRef = useRef(onPositionUpdate)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -45,6 +50,11 @@ export default function VideoPlayer({
     setShowControls(true)
     hideControlsDelayed()
   }, [hideControlsDelayed])
+
+  // Keep ref in sync so unmount cleanup always uses the latest callback
+  useEffect(() => {
+    onPositionUpdateRef.current = onPositionUpdate
+  }, [onPositionUpdate])
 
   // Initialize Shaka Player
   useEffect(() => {
@@ -80,6 +90,8 @@ export default function VideoPlayer({
     initPlayer()
 
     return () => {
+      // Save final position before destroying the player — use ref to avoid stale closure
+      if (video && onPositionUpdateRef.current) onPositionUpdateRef.current(Math.floor(video.currentTime))
       if (positionTimerRef.current) clearInterval(positionTimerRef.current)
       if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
       player.destroy()
@@ -106,12 +118,25 @@ export default function VideoPlayer({
     const video = videoRef.current
     if (!video) return
 
-    const onPlay = () => setIsPlaying(true)
-    const onPause = () => setIsPlaying(false)
+    const onPlay = () => {
+      setIsPlaying(true)
+      onPlayStateChange?.(true)
+    }
+    const onPause = () => {
+      setIsPlaying(false)
+      onPlayStateChange?.(false)
+      // Save position immediately on pause
+      if (onPositionUpdate) onPositionUpdate(Math.floor(video.currentTime))
+    }
     const onTimeUpdate = () => setCurrentTime(video.currentTime)
-    const onDurationChange = () => setDuration(video.duration)
+    const onDurationChange = () => {
+      setDuration(video.duration)
+      if (video.duration && isFinite(video.duration)) onDurationChangeProp?.(video.duration)
+    }
     const onEndedHandler = () => {
       setIsPlaying(false)
+      onPlayStateChange?.(false)
+      if (onPositionUpdate) onPositionUpdate(Math.floor(video.currentTime))
       onEnded?.()
     }
 
@@ -128,7 +153,7 @@ export default function VideoPlayer({
       video.removeEventListener('durationchange', onDurationChange)
       video.removeEventListener('ended', onEndedHandler)
     }
-  }, [onEnded])
+  }, [onEnded, onPositionUpdate, onPlayStateChange, onDurationChangeProp])
 
   // Fullscreen change listener
   useEffect(() => {
@@ -252,7 +277,11 @@ export default function VideoPlayer({
         {/* Top gradient + back + title */}
         <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-4 flex items-center gap-4">
           {onBack && (
-            <button onClick={onBack} className="p-1 hover:text-primary-400 transition-colors">
+            <button onClick={() => {
+              const video = videoRef.current
+              if (video && onPositionUpdate) onPositionUpdate(Math.floor(video.currentTime))
+              onBack()
+            }} className="p-1 hover:text-primary-400 transition-colors">
               <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
               </svg>

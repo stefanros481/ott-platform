@@ -4,7 +4,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getFeatured } from '../api/catalog'
 import { getHomeRecommendations } from '../api/recommendations'
-import { getContinueWatching, dismissBookmark } from '../api/viewing'
+import { getContinueWatching, getPausedBookmarks, dismissBookmark } from '../api/viewing'
 import HeroBanner from '../components/HeroBanner'
 import ContentRail from '../components/ContentRail'
 import TitleCard from '../components/TitleCard'
@@ -43,10 +43,17 @@ export default function HomePage() {
     enabled: !!profile,
   })
 
+  const { data: pausedBookmarks } = useQuery({
+    queryKey: ['pausedBookmarks', profile?.id],
+    queryFn: () => getPausedBookmarks(profile!.id),
+    enabled: !!profile,
+  })
+
   const dismissMutation = useMutation({
     mutationFn: (bookmarkId: string) => dismissBookmark(bookmarkId, profile!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['continueWatching'] })
+      queryClient.invalidateQueries({ queryKey: ['pausedBookmarks'] })
     },
   })
 
@@ -84,28 +91,32 @@ export default function HomePage() {
       {/* Content Rails */}
       <div className="mt-8 space-y-10">
         {/* Continue Watching Rail */}
-        {continueWatching && continueWatching.length > 0 && (
+        {(continueWatching && continueWatching.length > 0 || (pausedBookmarks && pausedBookmarks.length > 0)) && (
           <div>
-            <ContentRail title="Continue Watching">
-              {continueWatching.map(item => (
-                <ContinueWatchingCard
-                  key={item.id}
-                  item={item}
-                  onResume={(contentType, contentId) =>
-                    navigate(`/play/${contentType}/${contentId}`)
-                  }
-                  onDismiss={bookmarkId => dismissMutation.mutate(bookmarkId)}
-                />
-              ))}
-            </ContentRail>
-            <div className="px-4 sm:px-6 lg:px-8 mt-2">
-              <button
-                onClick={() => navigate('/paused')}
-                className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                Paused
-              </button>
-            </div>
+            {continueWatching && continueWatching.length > 0 && (
+              <ContentRail title="Continue Watching">
+                {continueWatching.map(item => (
+                  <ContinueWatchingCard
+                    key={item.id}
+                    item={item}
+                    onResume={(contentType, contentId) =>
+                      navigate(`/play/${contentType}/${contentId}`)
+                    }
+                    onDismiss={bookmarkId => dismissMutation.mutate(bookmarkId)}
+                  />
+                ))}
+              </ContentRail>
+            )}
+            {pausedBookmarks && pausedBookmarks.length > 0 && (
+              <div className="px-4 sm:px-6 lg:px-8 mt-2">
+                <button
+                  onClick={() => navigate('/paused')}
+                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  Paused ({pausedBookmarks.length})
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -125,7 +136,7 @@ export default function HomePage() {
             </div>
           ))
         ) : (
-          recommendations?.rails.map(rail => (
+          recommendations?.rails.filter(rail => rail.name !== 'Continue Watching').map(rail => (
             <ContentRail key={rail.name} title={rail.name}>
               {rail.items.map(item => (
                 <TitleCard

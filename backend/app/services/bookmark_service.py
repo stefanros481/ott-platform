@@ -272,6 +272,23 @@ async def restore_bookmark(
     return bookmark
 
 
+async def get_bookmark_by_content(
+    db: AsyncSession,
+    profile_id: uuid.UUID,
+    content_id: uuid.UUID,
+) -> Bookmark | None:
+    """Return a single bookmark by profile + content_id, or None if not found."""
+    result = await db.execute(
+        select(Bookmark).where(
+            and_(
+                Bookmark.profile_id == profile_id,
+                Bookmark.content_id == content_id,
+            )
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def resolve_next_episode(
     db: AsyncSession,
     profile_id: uuid.UUID,

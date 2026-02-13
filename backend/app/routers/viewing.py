@@ -109,6 +109,30 @@ async def restore_bookmark(
     )
 
 
+@router.get("/bookmarks/by-content/{content_id}", response_model=BookmarkResponse | None)
+async def get_bookmark_by_content(
+    content_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    profile_id: uuid.UUID = Query(..., description="Active profile"),
+):
+    """Fetch a single bookmark by content_id for the given profile. Returns null if none exists."""
+    bookmark = await bookmark_service.get_bookmark_by_content(db, profile_id, content_id)
+    if bookmark is None:
+        return None
+    return BookmarkResponse(
+        id=bookmark.id,
+        content_type=bookmark.content_type,
+        content_id=bookmark.content_id,
+        position_seconds=bookmark.position_seconds,
+        duration_seconds=bookmark.duration_seconds,
+        completed=bookmark.completed,
+        dismissed_at=bookmark.dismissed_at,
+        updated_at=bookmark.updated_at,
+        title_info=None,
+    )
+
+
 @router.put("/bookmarks", response_model=BookmarkResponse)
 async def update_bookmark(
     body: BookmarkUpdate,
