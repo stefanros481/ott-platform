@@ -1351,6 +1351,8 @@ After all agents complete, review the outputs against these criteria:
 - N/A (UI-only, no data changes) (002-video-player-controls)
 - Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query, Shaka Player 4+, Tailwind CSS 3+ (004-continue-watching-bookmarks)
 - PostgreSQL 16 + pgvector, Redis 7 (optional for caching) (004-continue-watching-bookmarks)
+- Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), Pydantic Settings, python-jose, bcryp (005-backend-hardening)
+- PostgreSQL 16 + pgvector 0.7+ (existing — no schema changes) (005-backend-hardening)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

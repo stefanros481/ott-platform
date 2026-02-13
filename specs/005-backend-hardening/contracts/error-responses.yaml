@@ -1,0 +1,78 @@
+# Error Response Contracts for Hardening Changes
+# Documents new/modified error responses introduced by this feature
+
+openapi: "3.1.0"
+
+# Profile Ownership (IDOR) — new 403 response on all profile-scoped endpoints
+# This response is returned by the VerifiedProfileId / OptionalVerifiedProfileId
+# dependencies before the endpoint handler runs.
+
+components:
+  schemas:
+    ProfileAccessDenied:
+      description: >
+        Returned when profile_id does not belong to the authenticated user,
+        or when profile_id does not exist (403 instead of 404 to prevent enumeration).
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          example: "Profile not found or access denied"
+
+    AdminAccessDenied:
+      description: >
+        Returned when a non-admin user attempts to access an admin endpoint.
+        Returned by the AdminUser dependency before the endpoint handler runs.
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          example: "Admin privileges required"
+
+  responses:
+    ProfileForbidden:
+      description: Profile does not belong to authenticated user
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProfileAccessDenied"
+
+    AdminForbidden:
+      description: User does not have admin privileges
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AdminAccessDenied"
+
+# Affected endpoints (profile ownership check added):
+#
+# REQUIRED profile_id (VerifiedProfileId):
+#   - GET    /api/v1/viewing/continue-watching
+#   - GET    /api/v1/viewing/continue-watching/paused
+#   - POST   /api/v1/viewing/bookmarks/{bookmark_id}/dismiss
+#   - POST   /api/v1/viewing/bookmarks/{bookmark_id}/restore
+#   - GET    /api/v1/viewing/bookmarks/by-content/{content_id}
+#   - PUT    /api/v1/viewing/bookmarks
+#   - GET    /api/v1/viewing/ratings/{title_id}
+#   - POST   /api/v1/viewing/ratings
+#   - GET    /api/v1/viewing/watchlist
+#   - POST   /api/v1/viewing/watchlist/{title_id}
+#   - DELETE  /api/v1/viewing/watchlist/{title_id}
+#   - POST   /api/v1/epg/favorites/{channel_id}
+#   - DELETE  /api/v1/epg/favorites/{channel_id}
+#   - GET    /api/v1/recommendations/home
+#   - GET    /api/v1/recommendations/post-play/{title_id}
+#
+# OPTIONAL profile_id (OptionalVerifiedProfileId):
+#   - GET    /api/v1/catalog/titles
+#   - GET    /api/v1/catalog/titles/{title_id}
+#   - GET    /api/v1/catalog/featured
+#   - GET    /api/v1/catalog/search
+#   - GET    /api/v1/catalog/search/semantic
+#   - GET    /api/v1/epg/channels
+#   - GET    /api/v1/recommendations/similar/{title_id}
+#
+# Admin authorization (AdminUser dependency):
+#   - All 15 endpoints under /api/v1/admin/*

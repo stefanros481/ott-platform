@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.catalog import Episode, Genre, Season, Title, TitleCast, TitleGenre
+from app.services.search_service import escape_like
 
 
 async def get_titles(
@@ -48,7 +49,7 @@ async def get_titles(
         count_q = count_q.where(Title.title_type == title_type)
 
     if search_query:
-        pattern = f"%{search_query}%"
+        pattern = f"%{escape_like(search_query)}%"
         cast_match = exists(
             select(TitleCast.id).where(
                 TitleCast.title_id == Title.id,

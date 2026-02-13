@@ -153,15 +153,12 @@ async def get_for_you_rail(
     centroid = np.mean(vectors, axis=0).tolist()
 
     # 3. Similarity search excluding already-interacted titles.
-    # Build exclusion list as a comma-separated string of quoted UUIDs for the SQL.
-    exclusion_list = ", ".join(f"'{uid}'" for uid in interacted_ids)
-
     # Convert to plain float string for pgvector compatibility.
     vec_str = "[" + ",".join(str(float(v)) for v in centroid) + "]"
 
     age_filter = ""
-    bind_kw: dict = dict(query_vec=vec_str, lim=limit)
-    extra_params = []
+    bind_kw: dict = dict(query_vec=vec_str, lim=limit, excluded_ids=list(interacted_ids))
+    extra_params = [bindparam("excluded_ids", expanding=True)]
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
         bind_kw["allowed"] = list(allowed_ratings)
@@ -174,13 +171,12 @@ async def get_for_you_rail(
                1 - (ce.embedding <=> CAST(:query_vec AS vector)) AS similarity
         FROM content_embeddings ce
         JOIN titles t ON t.id = ce.title_id
-        WHERE ce.title_id NOT IN ({exclusion_list}) {age_filter}
+        WHERE ce.title_id NOT IN :excluded_ids {age_filter}
         ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
         LIMIT :lim
         """
     )
-    if extra_params:
-        stmt = stmt.bindparams(*extra_params)
+    stmt = stmt.bindparams(*extra_params)
     result = await db.execute(stmt.params(**bind_kw))
 
     return [
@@ -409,10 +405,9 @@ async def compute_resumption_scores(
         ]
         series_completed_counts: dict[str, int] = {}
         if episode_ids:
-            id_list = ", ".join(f"'{eid}'" for eid in episode_ids)
             result = await db.execute(
                 text(
-                    f"""
+                    """
                     SELECT e_target.id AS episode_id,
                            COUNT(b2.id) AS completed_count
                     FROM episodes e_target
@@ -423,10 +418,11 @@ async def compute_resumption_scores(
                     LEFT JOIN bookmarks b2 ON b2.content_id = e_same.id
                         AND b2.completed = true
                         AND b2.updated_at > NOW() - INTERVAL '30 days'
-                    WHERE e_target.id IN ({id_list})
+                    WHERE e_target.id IN :episode_ids
                     GROUP BY e_target.id
                     """
-                )
+                ).bindparams(bindparam("episode_ids", expanding=True)),
+                {"episode_ids": episode_ids},
             )
             for row in result.fetchall():
                 series_completed_counts[str(row.episode_id)] = int(row.completed_count)

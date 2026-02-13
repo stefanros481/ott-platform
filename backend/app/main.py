@@ -9,7 +9,13 @@ from app.config import settings
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # Startup: nothing needed for now (DB pool is lazy)
+    import sys
+
+    secret = settings.jwt_secret.get_secret_value()
+    if len(secret) < 32:
+        print("FATAL: JWT_SECRET must be at least 32 characters", file=sys.stderr)
+        sys.exit(1)
+
     yield
     # Shutdown: dispose engine
     from app.database import engine
@@ -28,8 +34,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # Import and mount routers
@@ -43,6 +49,35 @@ app.include_router(viewing.router, prefix="/api/v1/viewing", tags=["Viewing"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 
 
+@app.get("/health/live")
+async def health_live():
+    return {"status": "ok"}
+
+
+async def _check_readiness():
+    import asyncio
+
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+
+    from app.database import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=5.0)
+        return JSONResponse({"status": "ok", "checks": {"database": "ok"}})
+    except Exception:
+        return JSONResponse(
+            {"status": "degraded", "checks": {"database": "unreachable"}},
+            status_code=503,
+        )
+
+
+@app.get("/health/ready")
+async def health_ready():
+    return await _check_readiness()
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return await _check_readiness()

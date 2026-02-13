@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, CurrentUser, OptionalVerifiedProfileId
 from app.schemas.catalog import (
     CastMember,
     GenreResponse,
@@ -90,7 +90,7 @@ async def list_titles(
     genre: str | None = Query(None, description="Filter by genre slug"),
     type: str | None = Query(None, description="Filter by title type (movie/series)"),
     q: str | None = Query(None, description="Free-text search"),
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ) -> PaginatedResponse[TitleListItem]:
     """Browse the content catalog with optional filtering and search."""
     allowed_ratings = None
@@ -118,7 +118,7 @@ async def get_title(
     title_id: uuid.UUID,
     user: CurrentUser,
     db: DB,
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ) -> TitleDetail:
     """Retrieve full detail for a single title."""
     title = await catalog_service.get_title_detail(db, title_id)
@@ -148,7 +148,7 @@ async def list_genres(user: CurrentUser, db: DB) -> list[GenreResponse]:
 async def featured_titles(
     user: CurrentUser,
     db: DB,
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ) -> list[TitleListItem]:
     """Return featured titles for the hero banner carousel."""
     allowed_ratings = None
@@ -165,7 +165,7 @@ async def search_titles(
     q: str = Query(..., min_length=1, description="Search query"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ) -> PaginatedResponse[TitleListItem]:
     """Search titles by keyword (alias for /titles?q=)."""
     allowed_ratings = None
@@ -193,7 +193,7 @@ async def semantic_search(
     q: str = Query(..., min_length=1, description="Search query (natural language supported)"),
     mode: str = Query("hybrid", pattern="^(keyword|semantic|hybrid)$", description="Search mode"),
     page_size: int = Query(20, ge=1, le=100, description="Max results"),
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ) -> SemanticSearchResponse:
     """Hybrid semantic + keyword search with match explanations."""
     allowed_ratings = None

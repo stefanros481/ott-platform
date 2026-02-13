@@ -40,7 +40,7 @@ def create_access_token(user_id: uuid.UUID, is_admin: bool) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=settings.jwt_expiry_minutes),
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm)
 
 
 def _hash_token(raw_token: str) -> str:

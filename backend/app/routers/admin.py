@@ -7,7 +7,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, AdminUser
+from app.services.search_service import escape_like
 from app.models.catalog import Title, TitleGenre
 from app.models.embedding import ContentEmbedding
 from app.models.epg import Channel, ScheduleEntry
@@ -33,28 +34,14 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _require_admin(user: User) -> None:
-    """Raise 403 if the current user is not an admin."""
-    if not user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-
-
-# ---------------------------------------------------------------------------
 # Platform Stats
 # ---------------------------------------------------------------------------
 
 
 @router.get("/stats", response_model=PlatformStatsResponse)
-async def stats(db: DB, user: CurrentUser):
+async def stats(db: DB, user: AdminUser):
     """Return high-level platform statistics."""
-    _require_admin(user)
+
 
     title_count = (await db.execute(select(func.count(Title.id)))).scalar_one()
     channel_count = (await db.execute(select(func.count(Channel.id)))).scalar_one()
@@ -77,13 +64,13 @@ async def stats(db: DB, user: CurrentUser):
 @router.get("/titles", response_model=TitlePaginatedResponse)
 async def list_titles(
     db: DB,
-    user: CurrentUser,
+    user: AdminUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     q: str | None = Query(None, description="Search by title"),
 ):
     """Paginated list of titles for the admin table."""
-    _require_admin(user)
+
 
     # Base query
     query = select(Title)
@@ -91,8 +78,9 @@ async def list_titles(
 
     # Search filter
     if q:
-        query = query.where(Title.title.ilike(f"%{q}%"))
-        count_query = count_query.where(Title.title.ilike(f"%{q}%"))
+        pattern = f"%{escape_like(q)}%"
+        query = query.where(Title.title.ilike(pattern))
+        count_query = count_query.where(Title.title.ilike(pattern))
 
     # Total count
     total = (await db.execute(count_query)).scalar() or 0
@@ -127,9 +115,9 @@ async def list_titles(
 
 
 @router.post("/titles", response_model=TitleAdminResponse, status_code=201)
-async def create_title(body: TitleCreateRequest, db: DB, user: CurrentUser):
+async def create_title(body: TitleCreateRequest, db: DB, user: AdminUser):
     """Create a new VOD title."""
-    _require_admin(user)
+
 
     title = Title(
         title=body.title,
@@ -175,9 +163,9 @@ async def create_title(body: TitleCreateRequest, db: DB, user: CurrentUser):
 
 
 @router.get("/titles/{title_id}")
-async def get_title(title_id: uuid.UUID, db: DB, user: CurrentUser):
+async def get_title(title_id: uuid.UUID, db: DB, user: AdminUser):
     """Get a single title with all fields for the edit form."""
-    _require_admin(user)
+
 
     result = await db.execute(select(Title).where(Title.id == title_id))
     title = result.scalar_one_or_none()
@@ -214,9 +202,9 @@ async def get_title(title_id: uuid.UUID, db: DB, user: CurrentUser):
 
 
 @router.put("/titles/{title_id}", response_model=TitleAdminResponse)
-async def update_title(title_id: uuid.UUID, body: TitleUpdateRequest, db: DB, user: CurrentUser):
+async def update_title(title_id: uuid.UUID, body: TitleUpdateRequest, db: DB, user: AdminUser):
     """Update an existing VOD title."""
-    _require_admin(user)
+
 
     result = await db.execute(select(Title).where(Title.id == title_id))
     title = result.scalar_one_or_none()
@@ -258,9 +246,9 @@ async def update_title(title_id: uuid.UUID, body: TitleUpdateRequest, db: DB, us
 
 
 @router.delete("/titles/{title_id}", status_code=204)
-async def delete_title(title_id: uuid.UUID, db: DB, user: CurrentUser):
+async def delete_title(title_id: uuid.UUID, db: DB, user: AdminUser):
     """Delete a title and its related data (cascade)."""
-    _require_admin(user)
+
 
     result = await db.execute(select(Title).where(Title.id == title_id))
     title = result.scalar_one_or_none()
@@ -277,9 +265,9 @@ async def delete_title(title_id: uuid.UUID, db: DB, user: CurrentUser):
 
 
 @router.get("/users")
-async def list_users(db: DB, user: CurrentUser):
+async def list_users(db: DB, user: AdminUser):
     """List all users with profile counts."""
-    _require_admin(user)
+
 
     result = await db.execute(
         select(
@@ -314,9 +302,9 @@ async def list_users(db: DB, user: CurrentUser):
 
 
 @router.get("/channels", response_model=list[ChannelResponse])
-async def list_channels(db: DB, user: CurrentUser):
+async def list_channels(db: DB, user: AdminUser):
     """List all channels (admin view)."""
-    _require_admin(user)
+
 
     result = await db.execute(select(Channel).order_by(Channel.channel_number))
     channels = result.scalars().all()
@@ -336,9 +324,9 @@ async def list_channels(db: DB, user: CurrentUser):
 
 
 @router.post("/channels", response_model=ChannelResponse, status_code=201)
-async def create_channel(body: ChannelCreateRequest, db: DB, user: CurrentUser):
+async def create_channel(body: ChannelCreateRequest, db: DB, user: AdminUser):
     """Create a new channel."""
-    _require_admin(user)
+
 
     channel = Channel(
         name=body.name,
@@ -365,9 +353,9 @@ async def create_channel(body: ChannelCreateRequest, db: DB, user: CurrentUser):
 
 
 @router.put("/channels/{channel_id}", response_model=ChannelResponse)
-async def update_channel(channel_id: uuid.UUID, body: ChannelUpdateRequest, db: DB, user: CurrentUser):
+async def update_channel(channel_id: uuid.UUID, body: ChannelUpdateRequest, db: DB, user: AdminUser):
     """Update an existing channel."""
-    _require_admin(user)
+
 
     result = await db.execute(select(Channel).where(Channel.id == channel_id))
     channel = result.scalar_one_or_none()
@@ -400,12 +388,12 @@ async def update_channel(channel_id: uuid.UUID, body: ChannelUpdateRequest, db: 
 @router.get("/schedule", response_model=list[ScheduleEntryResponse])
 async def list_schedule(
     db: DB,
-    user: CurrentUser,
+    user: AdminUser,
     channel_id: uuid.UUID = Query(..., description="Channel to fetch schedule for"),
     day: date = Query(default=None, alias="date", description="Date in YYYY-MM-DD format"),
 ):
     """List schedule entries for a channel on a given date."""
-    _require_admin(user)
+
 
     if day is None:
         from datetime import datetime, timezone
@@ -428,9 +416,9 @@ async def list_schedule(
 
 
 @router.post("/schedule", response_model=ScheduleEntryResponse, status_code=201)
-async def create_schedule_entry(body: ScheduleEntryCreateRequest, db: DB, user: CurrentUser):
+async def create_schedule_entry(body: ScheduleEntryCreateRequest, db: DB, user: AdminUser):
     """Create a new schedule entry."""
-    _require_admin(user)
+
 
     entry = ScheduleEntry(
         channel_id=body.channel_id,
@@ -453,9 +441,9 @@ async def create_schedule_entry(body: ScheduleEntryCreateRequest, db: DB, user: 
 
 
 @router.put("/schedule/{entry_id}", response_model=ScheduleEntryResponse)
-async def update_schedule_entry(entry_id: uuid.UUID, body: ScheduleEntryUpdateRequest, db: DB, user: CurrentUser):
+async def update_schedule_entry(entry_id: uuid.UUID, body: ScheduleEntryUpdateRequest, db: DB, user: AdminUser):
     """Update a schedule entry."""
-    _require_admin(user)
+
 
     result = await db.execute(select(ScheduleEntry).where(ScheduleEntry.id == entry_id))
     entry = result.scalar_one_or_none()
@@ -471,9 +459,9 @@ async def update_schedule_entry(entry_id: uuid.UUID, body: ScheduleEntryUpdateRe
 
 
 @router.delete("/schedule/{entry_id}", status_code=204)
-async def delete_schedule_entry(entry_id: uuid.UUID, db: DB, user: CurrentUser):
+async def delete_schedule_entry(entry_id: uuid.UUID, db: DB, user: AdminUser):
     """Delete a schedule entry."""
-    _require_admin(user)
+
 
     result = await db.execute(select(ScheduleEntry).where(ScheduleEntry.id == entry_id))
     entry = result.scalar_one_or_none()
@@ -492,7 +480,7 @@ async def delete_schedule_entry(entry_id: uuid.UUID, db: DB, user: CurrentUser):
 @router.post("/embeddings/generate", response_model=EmbeddingGenerationResponse)
 async def generate_embeddings(
     db: DB,
-    user: CurrentUser,
+    user: AdminUser,
     regenerate: bool = Query(False, description="Delete all existing embeddings and regenerate from scratch"),
 ):
     """Trigger embedding generation for all titles that do not yet have one.
@@ -500,7 +488,7 @@ async def generate_embeddings(
     Pass ``?regenerate=true`` to rebuild every embedding (e.g. after changing
     the text composition).
     """
-    _require_admin(user)
+
 
     from app.services.embedding_service import generate_all_embeddings
 

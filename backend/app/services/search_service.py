@@ -12,6 +12,11 @@ from app.services import embedding_service
 logger = logging.getLogger(__name__)
 
 
+def escape_like(value: str) -> str:
+    """Escape special characters for safe use in ILIKE patterns."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 # ---------------------------------------------------------------------------
 # T002 — Keyword search with field-level match detection
 # ---------------------------------------------------------------------------
@@ -24,7 +29,7 @@ async def keyword_search(
     limit: int = 30,
 ) -> list[dict]:
     """Run ILIKE keyword search and track which fields matched."""
-    pattern = f"%{query}%"
+    pattern = f"%{escape_like(query)}%"
 
     cast_match = exists(
         select(TitleCast.id).where(
