@@ -37,6 +37,11 @@ class PinVerifyResponse(BaseModel):
     pin_token: str | None = None
 
 
+class PinStatusResponse(BaseModel):
+    has_pin: bool
+    locked_until: datetime | None = None
+
+
 # -- Viewing Time Config schemas --
 
 class ViewingTimeConfigResponse(BaseModel):
@@ -62,9 +67,12 @@ class ViewingTimeConfigUpdate(BaseModel):
 # -- Grant Extra Time schemas --
 
 class GrantExtraTimeRequest(BaseModel):
-    minutes: int | None = Field(None, description="15, 30, or 60 minutes. null = Unlimited for today.")
+    minutes: int | None = Field(None, ge=15, le=120,
+                                description="15, 30, or 60 minutes. null = Unlimited for today.")
     pin: str | None = Field(None, min_length=4, max_length=4, pattern=r"^\d{4}$",
-                            description="Required for on-device grant from lock screen")
+                            description="Inline PIN verification for on-device grant")
+    pin_token: str | None = Field(None,
+                                  description="Short-lived token from /pin/verify (alternative to pin)")
 
 
 class GrantExtraTimeResponse(BaseModel):

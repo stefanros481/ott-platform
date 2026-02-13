@@ -4,8 +4,10 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import and_, select
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, AccountOwner, CurrentUser
+from app.models.user import Profile
 from app.schemas.viewing_time import (
     EnforcementStatus,
     HeartbeatRequest,
@@ -30,7 +32,7 @@ router = APIRouter()
 async def get_balance(
     profile_id: uuid.UUID,
     db: DB,
-    user: CurrentUser,
+    user: AccountOwner,
 ):
     """Return the current viewing time balance for a profile."""
     return await viewing_time_service.get_balance(db, profile_id)
@@ -52,6 +54,15 @@ async def heartbeat(
     Fail-closed: if an unexpected error occurs, returns ``blocked`` status
     so the client stops playback rather than allowing untracked viewing.
     """
+    # H-1: Verify profile belongs to authenticated user (IDOR prevention)
+    result = await db.execute(
+        select(Profile.id).where(
+            and_(Profile.id == body.profile_id, Profile.user_id == user.id)
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Profile not found or access denied")
+
     try:
         return await viewing_time_service.process_heartbeat(
             db,
@@ -86,8 +97,8 @@ async def end_session(
     db: DB,
     user: CurrentUser,
 ):
-    """End a viewing session."""
-    return await viewing_time_service.end_session(db, session_id)
+    """End a viewing session (H-2: ownership verified in service layer)."""
+    return await viewing_time_service.end_session(db, session_id, user.id)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +113,7 @@ async def end_session(
 async def playback_eligible(
     profile_id: uuid.UUID,
     db: DB,
-    user: CurrentUser,
+    user: AccountOwner,
 ):
     """Pre-flight check: is this profile allowed to start playback?"""
     return await viewing_time_service.check_playback_eligible(db, profile_id)

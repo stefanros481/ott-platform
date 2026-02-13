@@ -332,14 +332,6 @@ export default function PlayerPage() {
         </div>
       )}
 
-      {/* Lock screen — shown when daily viewing time is exceeded */}
-      {isLocked && (
-        <LockScreen
-          profileId={profile?.id ?? ''}
-          nextResetAt={balance?.next_reset_at ?? null}
-          onUnlocked={handleUnlocked}
-        />
-      )}
     </div>
   )
 }

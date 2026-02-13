@@ -39,6 +39,7 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
   const [pinError, setPinError] = useState<string | null>(null)
   const [remainingAttempts, setRemainingAttempts] = useState<number | null>(null)
   const [pinVerified, setPinVerified] = useState(false)
+  const [pinToken, setPinToken] = useState<string | null>(null)
   const [granting, setGranting] = useState(false)
   const [grantSuccess, setGrantSuccess] = useState<string | null>(null)
 
@@ -87,6 +88,7 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
       const result = await verifyPin(pinCode)
       if (result.verified) {
         setPinVerified(true)
+        setPinToken(result.pin_token)
       }
     } catch (err: unknown) {
       const error = err as { message?: string; status?: number }
@@ -110,7 +112,7 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
   const handleGrant = async (preset: GrantPreset) => {
     setGranting(true)
     try {
-      await grantExtraTime(profileId, preset.minutes)
+      await grantExtraTime(profileId, preset.minutes, undefined, pinToken ?? undefined)
       setGrantSuccess(preset.label)
       setTimeout(() => {
         onUnlocked()
@@ -128,6 +130,7 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
     setPin(['', '', '', ''])
     setPinError(null)
     setPinVerified(false)
+    setPinToken(null)
     setGrantSuccess(null)
     setRemainingAttempts(null)
   }

@@ -12,6 +12,7 @@ from app.schemas.parental_controls import (
     PinCreate,
     PinReset,
     PinResponse,
+    PinStatusResponse,
     PinVerify,
     PinVerifyResponse,
     ViewingHistoryResponse,
@@ -27,6 +28,15 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # PIN management
 # ---------------------------------------------------------------------------
+
+
+@router.get("/pin/status", response_model=PinStatusResponse)
+async def pin_status(user: CurrentUser):
+    """H-5: Lightweight check — has a PIN been set? Is it currently locked?"""
+    return PinStatusResponse(
+        has_pin=user.pin_hash is not None,
+        locked_until=user.pin_lockout_until,
+    )
 
 
 @router.post("/pin", response_model=PinResponse)
@@ -66,7 +76,8 @@ async def verify_pin(
             detail=f"Incorrect PIN. {remaining} attempt(s) remaining.",
         )
 
-    return PinVerifyResponse(verified=True, pin_token=None)
+    token = pin_service.generate_pin_token(user.id)
+    return PinVerifyResponse(verified=True, pin_token=token)
 
 
 @router.post("/pin/reset", response_model=PinResponse)
@@ -161,12 +172,14 @@ async def grant_extra_time(
 ):
     """Grant additional viewing time for today.
 
-    On-device grant: supply ``pin`` (verified against account PIN).
+    On-device grant: supply ``pin`` or ``pin_token`` (from prior verify).
     Remote grant: no ``pin`` needed, just JWT auth + profile ownership.
     """
-    is_remote = body.pin is None
+    has_pin = body.pin is not None
+    has_pin_token = body.pin_token is not None
+    is_remote = not has_pin and not has_pin_token
 
-    if body.pin is not None:
+    if has_pin:
         ok = await pin_service.verify_pin(db, user, body.pin)
         if not ok:
             remaining = pin_service.MAX_FAILED_ATTEMPTS - user.pin_failed_attempts
@@ -174,6 +187,9 @@ async def grant_extra_time(
                 status_code=403,
                 detail=f"Incorrect PIN. {remaining} attempt(s) remaining.",
             )
+    elif has_pin_token:
+        if not pin_service.verify_pin_token(body.pin_token, user.id):
+            raise HTTPException(status_code=403, detail="Invalid or expired PIN token")
 
     from app.services.viewing_time_service import grant_extra_time as _grant
 
@@ -209,6 +225,12 @@ async def get_viewing_history(
     to_date: date = Query(..., description="End date (inclusive) YYYY-MM-DD"),
 ):
     """Return viewing session history for a profile within a date range."""
+    # H-3: Cap date range to 90 days to prevent expensive queries
+    if (to_date - from_date).days > 90:
+        raise HTTPException(status_code=422, detail="Date range must not exceed 90 days")
+    if from_date > to_date:
+        raise HTTPException(status_code=422, detail="from_date must not be after to_date")
+
     from app.services.viewing_time_service import get_viewing_history as _history
 
     return await _history(db, profile_id, from_date, to_date)
