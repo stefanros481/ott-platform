@@ -2,8 +2,10 @@
 
 import uuid
 from datetime import datetime
+from typing import ClassVar
+from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # -- PIN schemas --
@@ -28,7 +30,7 @@ class PinResponse(BaseModel):
 
 class PinError(BaseModel):
     detail: str
-    remaining_attempts: int | None = None
+    # M-09: remaining_attempts removed — don't leak attempt count to clients
     locked_until: datetime | None = None
 
 
@@ -62,6 +64,18 @@ class ViewingTimeConfigUpdate(BaseModel):
     reset_hour: int | None = Field(None, ge=0, le=23)
     educational_exempt: bool | None = None
     timezone: str | None = Field(None, max_length=50)
+    pin_token: str | None = Field(None,
+                                  description="Required when changing sensitive fields (reset_hour, educational_exempt)")
+
+    # M-03: Fields that require PIN verification to change
+    SENSITIVE_FIELDS: ClassVar[set[str]] = {"reset_hour", "educational_exempt"}
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        if v is not None and v not in available_timezones():
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
 
 
 # -- Grant Extra Time schemas --

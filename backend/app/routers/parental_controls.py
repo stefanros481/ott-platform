@@ -70,10 +70,10 @@ async def verify_pin(
         raise  # re-raise lockout / no-PIN errors
 
     if not ok:
-        remaining = pin_service.MAX_FAILED_ATTEMPTS - user.pin_failed_attempts
+        # M-09: Don't leak remaining attempt count — generic message only
         raise HTTPException(
             status_code=403,
-            detail=f"Incorrect PIN. {remaining} attempt(s) remaining.",
+            detail="Incorrect PIN",
         )
 
     token = pin_service.generate_pin_token(user.id)
@@ -140,12 +140,27 @@ async def update_viewing_time_config(
                 detail=f"{field_name} must be a multiple of 15 minutes",
             )
 
+    # M-03: Require PIN token when changing sensitive fields
+    update_data = body.model_dump(exclude_unset=True)
+    update_data.pop("pin_token", None)  # never persist pin_token itself
+    changed_sensitive = set(update_data.keys()) & ViewingTimeConfigUpdate.SENSITIVE_FIELDS
+    if changed_sensitive:
+        if not body.pin_token or not pin_service.verify_pin_token(body.pin_token, user.id):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Valid PIN token required to change: {', '.join(sorted(changed_sensitive))}",
+            )
+
     config = await ensure_default_config(db, profile_id)
 
-    # Apply updates for all fields that were provided
-    update_data = body.model_dump(exclude_unset=True)
+    # Apply updates (explicit allowlist — only known config fields)
+    ALLOWED_CONFIG_FIELDS = {
+        "weekday_limit_minutes", "weekend_limit_minutes",
+        "reset_hour", "educational_exempt", "timezone",
+    }
     for key, value in update_data.items():
-        setattr(config, key, value)
+        if key in ALLOWED_CONFIG_FIELDS:
+            setattr(config, key, value)
 
     from datetime import UTC, datetime
 
@@ -182,10 +197,10 @@ async def grant_extra_time(
     if has_pin:
         ok = await pin_service.verify_pin(db, user, body.pin)
         if not ok:
-            remaining = pin_service.MAX_FAILED_ATTEMPTS - user.pin_failed_attempts
+            # M-09: Don't leak remaining attempt count
             raise HTTPException(
                 status_code=403,
-                detail=f"Incorrect PIN. {remaining} attempt(s) remaining.",
+                detail="Incorrect PIN",
             )
     elif has_pin_token:
         if not pin_service.verify_pin_token(body.pin_token, user.id):

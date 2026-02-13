@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { verifyPin, grantExtraTime, type PinError } from '../api/parentalControls'
+import { verifyPin, grantExtraTime } from '../api/parentalControls'
 
 interface LockScreenProps {
   profileId: string
@@ -37,7 +37,6 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
   const [showPinEntry, setShowPinEntry] = useState(false)
   const [pin, setPin] = useState(['', '', '', ''])
   const [pinError, setPinError] = useState<string | null>(null)
-  const [remainingAttempts, setRemainingAttempts] = useState<number | null>(null)
   const [pinVerified, setPinVerified] = useState(false)
   const [pinToken, setPinToken] = useState<string | null>(null)
   const [granting, setGranting] = useState(false)
@@ -92,17 +91,8 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
       }
     } catch (err: unknown) {
       const error = err as { message?: string; status?: number }
-      // Try to parse error for remaining attempts
-      let msg = 'Incorrect PIN'
-      if (error.message) {
-        try {
-          const parsed: PinError = JSON.parse(error.message)
-          msg = parsed.detail || msg
-          setRemainingAttempts(parsed.remaining_attempts)
-        } catch {
-          msg = error.message
-        }
-      }
+      // M-09: Server no longer sends attempt count — show generic error
+      const msg = error.message || 'Incorrect PIN'
       setPinError(msg)
       setPin(['', '', '', ''])
       setTimeout(() => inputRefs.current[0]?.focus(), 100)
@@ -132,7 +122,6 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
     setPinVerified(false)
     setPinToken(null)
     setGrantSuccess(null)
-    setRemainingAttempts(null)
   }
 
   const resetTime = formatResetTime(nextResetAt)
@@ -211,11 +200,6 @@ export default function LockScreen({ profileId, nextResetAt, onUnlocked }: LockS
             {pinError && (
               <p className="text-sm text-red-400 mb-2">
                 {pinError}
-                {remainingAttempts !== null && (
-                  <span className="block text-xs mt-1">
-                    {remainingAttempts} attempts remaining
-                  </span>
-                )}
               </p>
             )}
 

@@ -259,6 +259,9 @@ async def process_heartbeat(
         session = sess_result.scalar_one_or_none()
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        # M-02: Verify session belongs to the requesting profile
+        if session.profile_id != profile_id:
+            raise HTTPException(status_code=403, detail="Session does not belong to this profile")
         session.last_heartbeat_at = now
 
     # ---- Pause handling ----
@@ -545,13 +548,19 @@ async def grant_extra_time(
 # ---------------------------------------------------------------------------
 
 
+MAX_HISTORY_SESSIONS = 500
+
+
 async def get_viewing_history(
     db: AsyncSession,
     profile_id: uuid.UUID,
     from_date: date,
     to_date: date,
 ) -> ViewingHistoryResponse:
-    """Return viewing session history grouped by date."""
+    """Return viewing session history grouped by date.
+
+    M-05: Results capped at MAX_HISTORY_SESSIONS to prevent unbounded queries.
+    """
     result = await db.execute(
         select(ViewingSession)
         .options(selectinload(ViewingSession.title))
@@ -563,6 +572,7 @@ async def get_viewing_history(
             )
         )
         .order_by(ViewingSession.started_at.desc())
+        .limit(MAX_HISTORY_SESSIONS)
     )
     sessions = result.scalars().all()
 
