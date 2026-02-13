@@ -1,5 +1,6 @@
 """PIN management service — create, verify, reset parental control PINs."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -59,6 +60,8 @@ async def verify_pin(db: AsyncSession, user: User, pin: str) -> bool:
     Returns ``True`` on success, ``False`` on mismatch.
     Raises 403 if the account is currently locked out.
     Raises 400 if no PIN has been set.
+
+    M-04: Uses a constant-time delay to prevent timing oracle attacks.
     """
     # Check lockout
     if user.pin_lockout_until is not None and user.pin_lockout_until > datetime.now(UTC):
@@ -71,19 +74,27 @@ async def verify_pin(db: AsyncSession, user: User, pin: str) -> bool:
     if user.pin_hash is None:
         raise HTTPException(status_code=400, detail="No PIN set")
 
-    if _verify_pin_hash(pin, user.pin_hash):
-        # Success — reset counters
+    # M-04: Normalize response time so success and failure are indistinguishable
+    start = asyncio.get_event_loop().time()
+    matched = _verify_pin_hash(pin, user.pin_hash)
+
+    if matched:
         user.pin_failed_attempts = 0
         user.pin_lockout_until = None
         await db.commit()
-        return True
+    else:
+        user.pin_failed_attempts += 1
+        if user.pin_failed_attempts >= MAX_FAILED_ATTEMPTS:
+            user.pin_lockout_until = datetime.now(UTC) + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
+        await db.commit()
 
-    # Failure — increment counter, possibly lock
-    user.pin_failed_attempts += 1
-    if user.pin_failed_attempts >= MAX_FAILED_ATTEMPTS:
-        user.pin_lockout_until = datetime.now(UTC) + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
-    await db.commit()
-    return False
+    # Pad to a minimum of 200ms to mask bcrypt timing differences
+    elapsed = asyncio.get_event_loop().time() - start
+    pad = max(0, 0.2 - elapsed)
+    if pad > 0:
+        await asyncio.sleep(pad)
+
+    return matched
 
 
 async def reset_pin(

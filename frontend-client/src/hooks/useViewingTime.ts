@@ -164,6 +164,9 @@ export function useViewingTime(profileId: string): UseViewingTimeReturn {
 
 const HEARTBEAT_INTERVAL_MS = 30_000
 
+/** M-06: Consecutive heartbeat failures before we fail-closed. */
+const HEARTBEAT_FAIL_CLOSED_THRESHOLD = 3
+
 export interface UseHeartbeatReturn {
   enforcement: EnforcementStatus | null
   remainingMinutes: number | null
@@ -185,6 +188,7 @@ export function useHeartbeat(
 
   const intervalRef = useRef<ReturnType<typeof setInterval>>()
   const sessionIdRef = useRef<string | null>(null)
+  const consecutiveErrorsRef = useRef(0)
   const profileIdRef = useRef(profileId)
   const titleIdRef = useRef(titleId)
   const deviceIdRef = useRef(resolvedDeviceId)
@@ -203,13 +207,19 @@ export function useHeartbeat(
         device_id: deviceIdRef.current,
         is_paused: isPaused,
       })
+      consecutiveErrorsRef.current = 0
       sessionIdRef.current = resp.session_id
       setSessionId(resp.session_id)
       setEnforcement(resp.enforcement)
       setRemainingMinutes(resp.remaining_minutes)
       setIsEducational(resp.is_educational)
     } catch {
-      // Silently handle heartbeat failure
+      // M-06: Fail-closed — block playback after consecutive heartbeat failures
+      consecutiveErrorsRef.current += 1
+      if (consecutiveErrorsRef.current >= HEARTBEAT_FAIL_CLOSED_THRESHOLD) {
+        setEnforcement('blocked')
+        setRemainingMinutes(0)
+      }
     }
   }, [])
 

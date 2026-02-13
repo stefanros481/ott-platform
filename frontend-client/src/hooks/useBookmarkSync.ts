@@ -66,15 +66,41 @@ export function useBookmarkSync({
   }, [doSave])
 
   // Flush pending bookmarks from localStorage on mount
+  // M-08: Only replay entries belonging to the current profile; keep others
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PENDING_BOOKMARKS_KEY)
       if (!raw) return
-      const pending: PendingBookmark[] = JSON.parse(raw)
+      let pending: PendingBookmark[]
+      try {
+        pending = JSON.parse(raw)
+        if (!Array.isArray(pending)) {
+          localStorage.removeItem(PENDING_BOOKMARKS_KEY)
+          return
+        }
+      } catch {
+        localStorage.removeItem(PENDING_BOOKMARKS_KEY)
+        return
+      }
       localStorage.removeItem(PENDING_BOOKMARKS_KEY)
+
+      const toReplay: PendingBookmark[] = []
+      const toKeep: PendingBookmark[] = []
       for (const entry of pending) {
+        if (entry.profileId === profileId) {
+          toReplay.push(entry)
+        } else {
+          toKeep.push(entry)
+        }
+      }
+
+      // Re-persist entries belonging to other profiles
+      if (toKeep.length > 0) {
+        localStorage.setItem(PENDING_BOOKMARKS_KEY, JSON.stringify(toKeep))
+      }
+
+      for (const entry of toReplay) {
         saveBookmark(entry.profileId, entry.payload).catch(() => {
-          // If flush fails again, re-persist
           try {
             const current = localStorage.getItem(PENDING_BOOKMARKS_KEY)
             const arr: PendingBookmark[] = current ? JSON.parse(current) : []
@@ -88,7 +114,7 @@ export function useBookmarkSync({
     } catch {
       // localStorage unavailable
     }
-  }, [])
+  }, [profileId])
 
   // No independent interval — VideoPlayer drives periodic saves via onPositionUpdate
   // which calls saveNow(). This avoids duplicate bookmark writes every 30 seconds.

@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Database
-    database_url: str = "postgresql+asyncpg://ott_user:ott_password@localhost:5432/ott_platform"
+    # Database — M-07: no default credentials; must be provided via .env or env var
+    database_url: str
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_recycle: int = 3600
 
-    # CORS
-    cors_origins: str = "http://localhost:5173,http://localhost:5174"
+    # CORS — M-07: default to empty; must be explicitly configured
+    cors_origins: str = ""
 
     # AI / Embeddings
     embedding_model: str = "all-MiniLM-L6-v2"

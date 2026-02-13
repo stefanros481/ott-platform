@@ -10,24 +10,38 @@ class ApiError extends Error {
   }
 }
 
+// M-10: Singleton refresh lock — prevents concurrent refresh races
+let refreshPromise: Promise<string | null> | null = null
+
 async function refreshToken(): Promise<string | null> {
-  const refresh = localStorage.getItem('refresh_token')
-  if (!refresh) return null
+  // If a refresh is already in flight, reuse it
+  if (refreshPromise) return refreshPromise
 
-  const res = await fetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refresh }),
-  })
+  refreshPromise = (async () => {
+    try {
+      const refresh = localStorage.getItem('refresh_token')
+      if (!refresh) return null
 
-  if (!res.ok) return null
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      })
 
-  const data = await res.json()
-  localStorage.setItem('token', data.access_token)
-  if (data.refresh_token) {
-    localStorage.setItem('refresh_token', data.refresh_token)
-  }
-  return data.access_token
+      if (!res.ok) return null
+
+      const data = await res.json()
+      localStorage.setItem('token', data.access_token)
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token)
+      }
+      return data.access_token
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
 }
 
 export async function apiFetch<T>(

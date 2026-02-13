@@ -9,7 +9,7 @@ export interface PinVerifyResponse {
 
 export interface PinError {
   detail: string
-  remaining_attempts: number | null
+  // M-09: remaining_attempts removed — server no longer sends attempt count
   locked_until: string | null
 }
 
