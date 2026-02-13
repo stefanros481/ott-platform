@@ -1,0 +1,23 @@
+# CORS Policy Contract
+# Documents the restricted CORS configuration
+
+# Before (current):
+#   allow_methods: ["*"]
+#   allow_headers: ["*"]
+#   allow_credentials: true
+#   allow_origins: [from environment variable]
+
+# After (hardened):
+cors:
+  allow_origins: "${CORS_ORIGINS}"  # Unchanged — already configurable via env
+  allow_credentials: true            # Unchanged — needed for JWT in cookies/headers
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allow_headers:
+    - Authorization
+    - Content-Type
+    - Accept

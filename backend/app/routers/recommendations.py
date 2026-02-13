@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Query
 
-from app.dependencies import DB
+from app.dependencies import DB, OptionalVerifiedProfileId, VerifiedProfileId
 from app.schemas.recommendation import ContentRail, ContentRailItem, HomeResponse
 from app.services import recommendation_service
 from app.services.rating_utils import resolve_profile_rating
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get("/home", response_model=HomeResponse)
 async def home_rails(
     db: DB,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Return assembled home-screen rails for a profile.
 
@@ -40,7 +40,7 @@ async def similar_titles(
     title_id: uuid.UUID,
     db: DB,
     limit: int = Query(12, ge=1, le=50),
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for parental filtering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ):
     """Return titles similar to the given title using embedding similarity."""
     allowed_ratings = None
@@ -54,7 +54,7 @@ async def similar_titles(
 async def post_play(
     title_id: uuid.UUID,
     db: DB,
-    profile_id: uuid.UUID = Query(..., description="Active profile for parental filtering"),
+    profile_id: VerifiedProfileId,
     limit: int = Query(8, ge=1, le=20),
 ):
     """Post-play suggestions after finishing a title."""

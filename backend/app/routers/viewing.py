@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, delete, select, text
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, CurrentUser, VerifiedProfileId
 from app.models.viewing import Bookmark, Rating, WatchlistItem
 from app.schemas.viewing import (
     BookmarkResponse,
@@ -31,7 +31,7 @@ router = APIRouter()
 async def continue_watching(
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
     device_type: Literal["tv", "mobile", "tablet", "web"] = Query("web", description="Client device type"),
     hour_of_day: int | None = Query(None, ge=0, le=23, description="Client local hour (0-23)"),
     limit: int = Query(20, ge=1, le=20, description="Max items to return"),
@@ -55,7 +55,7 @@ async def continue_watching(
 async def paused_bookmarks(
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Return dismissed + stale bookmarks for the Paused section."""
     return await bookmark_service.get_paused_bookmarks(db, profile_id)
@@ -66,7 +66,7 @@ async def dismiss_bookmark(
     bookmark_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Dismiss a bookmark from Continue Watching (moves to Paused)."""
     bookmark = await bookmark_service.dismiss_bookmark(db, bookmark_id, profile_id)
@@ -90,7 +90,7 @@ async def restore_bookmark(
     bookmark_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Restore a dismissed/paused bookmark back to Continue Watching."""
     bookmark = await bookmark_service.restore_bookmark(db, bookmark_id, profile_id)
@@ -114,7 +114,7 @@ async def get_bookmark_by_content(
     content_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Fetch a single bookmark by content_id for the given profile. Returns null if none exists."""
     bookmark = await bookmark_service.get_bookmark_by_content(db, profile_id, content_id)
@@ -138,7 +138,7 @@ async def update_bookmark(
     body: BookmarkUpdate,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Create or update a playback bookmark (heartbeat). Auto-completes at 95% or final 2 min."""
     bookmark = await bookmark_service.upsert_bookmark(
@@ -172,7 +172,7 @@ async def get_rating(
     title_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Get the user's rating for a specific title (or null if not rated)."""
     result = await db.execute(
@@ -191,7 +191,7 @@ async def rate_title(
     body: RatingRequest,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Rate a title (thumbs up / thumbs down). Upserts if rating already exists."""
     result = await db.execute(
@@ -228,7 +228,7 @@ async def rate_title(
 async def get_watchlist(
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Return the profile's watchlist with title metadata."""
     result = await db.execute(
@@ -268,7 +268,7 @@ async def add_to_watchlist(
     title_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Add a title to the profile's watchlist (idempotent)."""
     existing = await db.execute(
@@ -292,7 +292,7 @@ async def remove_from_watchlist(
     title_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Remove a title from the profile's watchlist."""
     await db.execute(

@@ -7,6 +7,7 @@ from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.epg import Channel, ChannelFavorite, ScheduleEntry
+from app.services.search_service import escape_like
 
 
 async def get_channels(
@@ -144,7 +145,7 @@ async def search_schedule(
     """Search schedule entries by title (case-insensitive LIKE)."""
     result = await db.execute(
         select(ScheduleEntry)
-        .where(ScheduleEntry.title.ilike(f"%{query}%"))
+        .where(ScheduleEntry.title.ilike(f"%{escape_like(query)}%"))
         .order_by(ScheduleEntry.start_time)
         .limit(50)
     )

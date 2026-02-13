@@ -5,7 +5,7 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, CurrentUser, OptionalVerifiedProfileId, VerifiedProfileId
 from app.schemas.epg import (
     ChannelResponse,
     NowPlayingResponse,
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/channels", response_model=list[ChannelResponse])
 async def list_channels(
     db: DB,
-    profile_id: uuid.UUID | None = Query(None, description="Active profile for AI ordering"),
+    profile_id: OptionalVerifiedProfileId = None,
 ):
     """List all channels.
 
@@ -67,7 +67,7 @@ async def add_favorite(
     channel_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Add a channel to the profile's favourites."""
     await epg_service.add_favorite(db, profile_id, channel_id)
@@ -78,7 +78,7 @@ async def remove_favorite(
     channel_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    profile_id: uuid.UUID = Query(..., description="Active profile"),
+    profile_id: VerifiedProfileId,
 ):
     """Remove a channel from the profile's favourites."""
     await epg_service.remove_favorite(db, profile_id, channel_id)

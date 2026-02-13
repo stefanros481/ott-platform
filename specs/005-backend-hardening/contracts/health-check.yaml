@@ -1,0 +1,101 @@
+# Health Check API Contract
+# New endpoints: /health/live, /health/ready
+# Replaces: /health (aliased to /health/ready for backward compatibility)
+
+openapi: "3.1.0"
+
+paths:
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: >
+        Returns 200 if the application process is running.
+        Does NOT check external dependencies.
+        Used by orchestrators (e.g., Kubernetes livenessProbe) to decide whether to restart the container.
+      operationId: healthLive
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                required: [status]
+              example:
+                status: ok
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: >
+        Returns 200 if the application can serve requests (all critical dependencies reachable).
+        Returns 503 if any dependency is unreachable.
+        Completes within 5 seconds even if dependencies are slow.
+        Used by load balancers (e.g., Kubernetes readinessProbe) to decide whether to route traffic.
+      operationId: healthReady
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              example:
+                status: ok
+                checks:
+                  database: ok
+        "503":
+          description: One or more dependencies unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              example:
+                status: degraded
+                checks:
+                  database: unreachable
+
+  /health:
+    get:
+      summary: Health check (backward-compatible alias for /health/ready)
+      operationId: healthLegacy
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: One or more dependencies unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+components:
+  schemas:
+    ReadinessResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [ok, unreachable]
+          required: [database]
