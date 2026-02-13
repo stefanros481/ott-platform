@@ -1,3 +1,6 @@
+// SECURITY NOTE (H-6): Tokens are stored in localStorage for this PoC.
+// In production, migrate to httpOnly cookies set by the backend to prevent
+// XSS-based token theft. See: OWASP Token Storage Cheat Sheet.
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
 
 class ApiError extends Error {

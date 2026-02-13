@@ -1,16 +1,20 @@
 """PIN management service — create, verify, reset parental control PINs."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import HTTPException
+from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.user import User
 from app.services.auth_service import verify_password
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_DURATION_MINUTES = 30
+PIN_TOKEN_EXPIRY_MINUTES = 5
 
 
 def _hash_pin(pin: str) -> str:
@@ -99,3 +103,31 @@ async def reset_pin(
     user.pin_failed_attempts = 0
     user.pin_lockout_until = None
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# PIN token (C-02 security fix) — short-lived proof of PIN verification
+# ---------------------------------------------------------------------------
+
+
+def generate_pin_token(user_id: uuid.UUID) -> str:
+    """Create a short-lived JWT proving the parental PIN was recently verified."""
+    payload = {
+        "sub": str(user_id),
+        "purpose": "pin_verified",
+        "jti": str(uuid.uuid4()),
+        "exp": datetime.now(UTC) + timedelta(minutes=PIN_TOKEN_EXPIRY_MINUTES),
+    }
+    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm)
+
+
+def verify_pin_token(token: str, user_id: uuid.UUID) -> bool:
+    """Validate a pin_token and confirm it belongs to *user_id*."""
+    try:
+        payload = jwt.decode(token, settings.jwt_secret.get_secret_value(), algorithms=[settings.jwt_algorithm])
+        return (
+            payload.get("purpose") == "pin_verified"
+            and payload.get("sub") == str(user_id)
+        )
+    except JWTError:
+        return False

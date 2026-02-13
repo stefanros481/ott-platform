@@ -39,6 +39,9 @@ export interface UseViewingTimeReturn {
   refetchBalance: () => void
 }
 
+/** Consecutive fetch errors before we fail-closed and lock the screen. */
+const FAIL_CLOSED_THRESHOLD = 2
+
 export function useViewingTime(profileId: string): UseViewingTimeReturn {
   const [balance, setBalance] = useState<ViewingTimeBalance | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -51,12 +54,14 @@ export function useViewingTime(profileId: string): UseViewingTimeReturn {
   const warning5ShownRef = useRef(false)
   const intervalRef = useRef<ReturnType<typeof setInterval>>()
   const profileIdRef = useRef(profileId)
+  const consecutiveErrorsRef = useRef(0)
   profileIdRef.current = profileId
 
   const fetchBalance = useCallback(async () => {
     if (!profileIdRef.current) return
     try {
       const data = await getBalance(profileIdRef.current)
+      consecutiveErrorsRef.current = 0
       setBalance(data)
 
       // Derive enforcement from balance
@@ -85,7 +90,13 @@ export function useViewingTime(profileId: string): UseViewingTimeReturn {
         setIsLocked(false)
       }
     } catch {
-      // Silently handle — balance unavailable means no restrictions
+      // Fail-closed: lock after consecutive failures so kids can't bypass
+      // limits by blocking the API endpoint (C-01 security fix)
+      consecutiveErrorsRef.current += 1
+      if (consecutiveErrorsRef.current >= FAIL_CLOSED_THRESHOLD) {
+        setEnforcement('blocked')
+        setIsLocked(true)
+      }
     } finally {
       setIsLoading(false)
     }

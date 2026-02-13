@@ -129,10 +129,11 @@ export function grantExtraTime(
   profileId: string,
   minutes: number | null,
   pin?: string,
+  pinToken?: string,
 ): Promise<GrantExtraTimeResponse> {
   return apiFetch(`/parental-controls/profiles/${profileId}/viewing-time/grant`, {
     method: 'POST',
-    body: JSON.stringify({ minutes, pin }),
+    body: JSON.stringify({ minutes, pin, pin_token: pinToken }),
   })
 }
 

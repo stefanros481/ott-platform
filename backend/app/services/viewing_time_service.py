@@ -386,14 +386,29 @@ async def process_heartbeat(
 async def end_session(
     db: AsyncSession,
     session_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
 ) -> SessionEndResponse:
-    """Mark a viewing session as ended."""
+    """Mark a viewing session as ended.
+
+    When *user_id* is provided (H-2 security fix), verifies the session
+    belongs to a profile owned by that user before ending it.
+    """
     result = await db.execute(
         select(ViewingSession).where(ViewingSession.id == session_id)
     )
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # H-2: Verify ownership — session's profile must belong to the caller
+    if user_id is not None:
+        profile_result = await db.execute(
+            select(Profile.id).where(
+                and_(Profile.id == session.profile_id, Profile.user_id == user_id)
+            )
+        )
+        if profile_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Session access denied")
 
     now = datetime.now(UTC)
     session.ended_at = now
