@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { saveBookmark, BookmarkPayload } from '../api/viewing'
 
-const HEARTBEAT_INTERVAL_MS = 30_000
 const PENDING_BOOKMARKS_KEY = 'pendingBookmarks'
 
 interface PendingBookmark {
@@ -25,7 +24,6 @@ export function useBookmarkSync({
   isPlaying,
 }: UseBookmarkSyncParams): { saveNow: (positionSeconds: number) => void } {
   const positionRef = useRef(0)
-  const intervalRef = useRef<ReturnType<typeof setInterval>>()
   const doSaveRef = useRef<(positionSeconds: number) => void>(() => {})
 
   const buildPayload = useCallback(
@@ -92,27 +90,8 @@ export function useBookmarkSync({
     }
   }, [])
 
-  // 30-second heartbeat while playing
-  useEffect(() => {
-    if (!isPlaying) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = undefined
-      }
-      return
-    }
-
-    intervalRef.current = setInterval(() => {
-      doSave(positionRef.current)
-    }, HEARTBEAT_INTERVAL_MS)
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = undefined
-      }
-    }
-  }, [isPlaying, doSave])
+  // No independent interval — VideoPlayer drives periodic saves via onPositionUpdate
+  // which calls saveNow(). This avoids duplicate bookmark writes every 30 seconds.
 
   // Save final position on unmount — use ref to avoid stale closure
   useEffect(() => {

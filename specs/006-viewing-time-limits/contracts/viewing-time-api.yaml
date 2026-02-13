@@ -1,0 +1,222 @@
+openapi: 3.1.0
+info:
+  title: Viewing Time Tracking API
+  version: 1.0.0
+  description: Real-time viewing time tracking, balance queries, heartbeats, and enforcement for child profiles.
+
+paths:
+  /viewing-time/balance/{profile_id}:
+    get:
+      operationId: getViewingTimeBalance
+      summary: Get current viewing time balance for a profile
+      description: |
+        Returns remaining viewing time for the current viewing day.
+        For adult/non-child profiles, returns unlimited.
+        Used by clients to display remaining time indicator and determine playback eligibility.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewingTimeBalance"
+        "404":
+          description: Profile not found
+
+  /viewing-time/heartbeat:
+    post:
+      operationId: sendHeartbeat
+      summary: Send viewing session heartbeat
+      description: |
+        Client sends every 30 seconds during active playback.
+        Creates a new session on first heartbeat, or updates the existing session.
+        Increments the daily balance counter.
+        Returns updated balance so client can show remaining time.
+
+        If the balance is exhausted, returns `enforcement: "blocked"` — client must stop playback and show lock screen.
+
+        If another active session exists for this profile, terminates it (concurrent stream limit = 1 per child profile).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_id, title_id, device_id]
+              properties:
+                profile_id:
+                  type: string
+                  format: uuid
+                session_id:
+                  type: string
+                  format: uuid
+                  description: "Omit on first heartbeat (new session). Include on subsequent heartbeats."
+                title_id:
+                  type: string
+                  format: uuid
+                device_id:
+                  type: string
+                  maxLength: 100
+                  description: Client-generated stable device identifier
+                device_type:
+                  type: string
+                  enum: [tv, mobile, tablet, web]
+                  default: web
+                is_paused:
+                  type: boolean
+                  default: false
+                  description: "True if content is currently paused"
+      responses:
+        "200":
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeartbeatResponse"
+        "403":
+          description: Playback blocked — viewing time exhausted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeartbeatResponse"
+        "404":
+          description: Profile not found
+
+  /viewing-time/session/{session_id}/end:
+    post:
+      operationId: endSession
+      summary: Explicitly end a viewing session
+      description: Called when the user stops playback, navigates away, or closes the app. Finalizes the session and flushes accumulated time.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Session ended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id:
+                    type: string
+                    format: uuid
+                  total_seconds:
+                    type: integer
+                  ended_at:
+                    type: string
+                    format: date-time
+        "404":
+          description: Session not found
+
+  /viewing-time/playback-eligible/{profile_id}:
+    get:
+      operationId: checkPlaybackEligibility
+      summary: Check if a child profile can start playback
+      description: |
+        Pre-flight check before initiating playback.
+        Returns whether the profile has remaining viewing time.
+        For adult/non-child profiles, always returns eligible.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Eligibility result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eligible:
+                    type: boolean
+                  remaining_minutes:
+                    type: number
+                    nullable: true
+                    description: "null if unlimited"
+                  reason:
+                    type: string
+                    nullable: true
+                    description: "If not eligible, explains why (e.g., 'viewing_time_exhausted')"
+                  next_reset_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+
+components:
+  schemas:
+    ViewingTimeBalance:
+      type: object
+      properties:
+        profile_id:
+          type: string
+          format: uuid
+        is_child_profile:
+          type: boolean
+        has_limits:
+          type: boolean
+          description: "false if profile has no limits configured or is unlimited"
+        used_minutes:
+          type: number
+          description: Minutes consumed today (counted content only)
+        educational_minutes:
+          type: number
+          description: Educational minutes watched today (not counted)
+        limit_minutes:
+          type: integer
+          nullable: true
+          description: "Today's limit in minutes. null = unlimited."
+        remaining_minutes:
+          type: number
+          nullable: true
+          description: "Minutes remaining. null = unlimited. Can be negative if over-limit."
+        is_unlimited_override:
+          type: boolean
+          description: "True if parent granted 'Unlimited for today'"
+        next_reset_at:
+          type: string
+          format: date-time
+          description: When the balance resets (UTC)
+        warning_threshold_minutes:
+          type: array
+          items:
+            type: integer
+          description: "Warning thresholds in minutes [15, 5]"
+
+    HeartbeatResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        enforcement:
+          type: string
+          enum: [allowed, warning_15, warning_5, blocked]
+          description: |
+            - allowed: Normal playback
+            - warning_15: 15 minutes remaining, show first warning
+            - warning_5: 5 minutes remaining, show urgent warning
+            - blocked: Time exhausted, stop playback and show lock screen
+        remaining_minutes:
+          type: number
+          nullable: true
+        used_minutes:
+          type: number
+        is_educational:
+          type: boolean
+          description: "True if current content is educational (not counting toward limit)"

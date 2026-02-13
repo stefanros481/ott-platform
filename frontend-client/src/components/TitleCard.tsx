@@ -7,6 +7,7 @@ interface TitleCardProps {
   ageRating: string | null
   onClick: () => void
   isNew?: boolean
+  isEducational?: boolean
 }
 
 export default function TitleCard({
@@ -17,6 +18,7 @@ export default function TitleCard({
   ageRating,
   onClick,
   isNew,
+  isEducational,
 }: TitleCardProps) {
   return (
     <button
@@ -46,6 +48,13 @@ export default function TitleCard({
         <span className="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium uppercase bg-black/60 text-gray-300 rounded">
           {titleType === 'series' ? 'Series' : 'Movie'}
         </span>
+
+        {/* Educational badge */}
+        {isEducational && (
+          <span className="absolute top-8 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-emerald-600/80 text-emerald-100 rounded">
+            Educational
+          </span>
+        )}
 
         {/* Bottom info (visible on hover) */}
         <div className="absolute bottom-0 left-0 right-0 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">

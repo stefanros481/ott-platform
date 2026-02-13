@@ -101,3 +101,29 @@ async def get_admin_user(user: CurrentUser) -> User:
 
 
 AdminUser = Annotated[User, Depends(get_admin_user)]
+
+
+async def require_account_owner(
+    profile_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+) -> User:
+    """Verify that *profile_id* belongs to the authenticated user.
+
+    Returns the :class:`User` so downstream code can access user fields
+    (e.g. ``pin_hash``).  Raises 403 if the profile does not belong to the user.
+    """
+    result = await db.execute(
+        select(Profile.id).where(
+            and_(Profile.id == profile_id, Profile.user_id == user.id)
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Profile not found or access denied",
+        )
+    return user
+
+
+AccountOwner = Annotated[User, Depends(require_account_owner)]
