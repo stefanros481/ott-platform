@@ -1,0 +1,64 @@
+# Home Rails API Contract Changes
+# Endpoint: GET /api/v1/recommendations/home?profile_id={uuid}
+# Response: HomeResponse { rails: ContentRail[] }
+#
+# No schema changes to existing types. Changes are behavioral:
+# - New rail types returned in the rails array
+# - New rail ordering
+
+# Current rail order (before this feature):
+#   1. Continue Watching (rail_type: "continue_watching")
+#   2. For You (rail_type: "for_you")
+#   3. New Releases (rail_type: "new_releases")
+#   4. Trending (rail_type: "trending")
+#   5. Top in {Genre} (rail_type: "genre")
+
+# New rail order (after this feature):
+#   1. Continue Watching (rail_type: "continue_watching")   — unchanged
+#   2. My List (rail_type: "watchlist")                     — NEW (R-03)
+#   3. For You (rail_type: "for_you")                       — improved quality (R-01, R-02)
+#      OR Popular Now (rail_type: "popular_now")            — cold-start fallback (R-05)
+#   4. New Releases (rail_type: "new_releases")             — unchanged
+#   5. Trending (rail_type: "trending")                     — time-decayed (R-06)
+#   6. Top in {Genre} (rail_type: "genre")                  — unchanged
+
+# New rail_type values:
+#   - "watchlist": Profile's saved titles (My List). Omitted when empty.
+#   - "popular_now": Cold-start fallback for profiles with no viewing history.
+#     Replaces "for_you" position. Uses time-decayed popularity.
+
+# ContentRailItem schema (UNCHANGED):
+#   id: UUID
+#   title: string
+#   title_type: string (movie | series)
+#   poster_url: string | null
+#   landscape_url: string | null
+#   synopsis_short: string | null
+#   release_year: integer | null
+#   age_rating: string | null
+#   similarity_score: float | null
+
+---
+
+# Post-Play API Contract Changes
+# Endpoint: GET /api/v1/recommendations/post-play/{title_id}?profile_id={uuid}
+# Response: ContentRailItem[]
+#
+# Behavioral change (R-04):
+# - When title_id is an episode and a next episode exists:
+#   Response[0] = next episode (same ContentRailItem schema)
+#   Response[1..N] = similar titles (current behavior)
+# - When title_id is a movie or final episode:
+#   No change (similar titles only)
+
+---
+
+# Featured Titles API Contract Changes
+# Endpoint: GET /api/v1/catalog/featured?profile_id={uuid}
+# Response: TitleListItem[]
+#
+# Behavioral change (R-11):
+# - When profile_id provided AND profile has viewing history:
+#   Titles sorted by cosine similarity to profile centroid (most relevant first)
+# - When profile_id not provided OR no viewing history:
+#   No change (sorted by created_at DESC)

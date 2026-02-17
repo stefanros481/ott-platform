@@ -14,7 +14,7 @@ from app.schemas.catalog import (
     TitleDetail,
     TitleListItem,
 )
-from app.services import catalog_service, search_service
+from app.services import catalog_service, recommendation_service, search_service
 from app.services.rating_utils import resolve_profile_rating
 
 router = APIRouter()
@@ -150,11 +150,17 @@ async def featured_titles(
     db: DB,
     profile_id: OptionalVerifiedProfileId = None,
 ) -> list[TitleListItem]:
-    """Return featured titles for the hero banner carousel."""
+    """Return featured titles for the hero banner carousel.
+
+    When *profile_id* is provided, titles are sorted by cosine similarity to the
+    profile's viewing preferences.  New profiles fall back to ``created_at DESC``.
+    """
     allowed_ratings = None
     if profile_id is not None:
         allowed_ratings = await resolve_profile_rating(db, profile_id)
-    titles = await catalog_service.get_featured_titles(db, allowed_ratings=allowed_ratings)
+    titles = await catalog_service.get_featured_titles(
+        db, allowed_ratings=allowed_ratings, profile_id=profile_id
+    )
     return [_title_to_list_item(t) for t in titles]
 
 

@@ -53,6 +53,7 @@ def _channel_dict(ch: Channel) -> dict:
         "logo_url": ch.logo_url,
         "genre": ch.genre,
         "is_hd": ch.is_hd,
+        "hls_live_url": ch.hls_live_url,
     }
 
 

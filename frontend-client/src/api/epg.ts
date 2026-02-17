@@ -8,6 +8,7 @@ export interface Channel {
   genre: string
   is_hd: boolean
   is_favorite: boolean
+  hls_live_url: string | null
 }
 
 export interface ScheduleEntry {

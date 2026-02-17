@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
+import ScrollToTop from './components/ScrollToTop'
 import Navbar from './components/Navbar'
 import LoginPage from './pages/LoginPage'
 import ProfilePage from './pages/ProfilePage'
@@ -29,6 +30,7 @@ function AppLayout() {
 function App() {
   return (
     <AuthProvider>
+      <ScrollToTop />
       <Routes>
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />

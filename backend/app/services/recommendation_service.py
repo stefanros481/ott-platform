@@ -9,9 +9,9 @@ import numpy as np
 from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.catalog import Genre, Title, TitleGenre
+from app.models.catalog import Episode, Genre, Season, Title, TitleGenre
 from app.models.embedding import ContentEmbedding
-from app.models.viewing import Bookmark, Rating
+from app.models.viewing import Bookmark, Rating, WatchlistItem
 from app.schemas.viewing import ContinueWatchingItem
 
 logger = logging.getLogger(__name__)
@@ -136,19 +136,39 @@ async def get_for_you_rail(
     )
     rated_ids = {row[0] for row in rating_q.fetchall()}
 
-    interacted_ids = bookmarked_ids | rated_ids
-    if not interacted_ids:
-        return []
-
-    # 2. Fetch embeddings for interacted titles.
-    emb_q = await db.execute(
-        select(ContentEmbedding.embedding).where(
-            ContentEmbedding.title_id.in_(interacted_ids)
+    # Fetch thumbs-down title IDs for exclusion from centroid and results.
+    thumbs_down_q = await db.execute(
+        select(Rating.title_id).where(
+            Rating.profile_id == profile_id,
+            Rating.rating == -1,
         )
     )
-    vectors = [row[0] for row in emb_q.fetchall()]
-    if not vectors:
+    thumbs_down_ids = {row[0] for row in thumbs_down_q.fetchall()}
+
+    # Centroid uses bookmarks + thumbs-up, minus any thumbs-downed titles.
+    centroid_ids = (bookmarked_ids | rated_ids) - thumbs_down_ids
+    # Exclude all interacted + thumbs-down from results.
+    excluded_ids = bookmarked_ids | rated_ids | thumbs_down_ids
+
+    if not centroid_ids:
         return []
+
+    # 2. Fetch embeddings with title_id for thumbs-up weighting.
+    emb_q = await db.execute(
+        select(ContentEmbedding.title_id, ContentEmbedding.embedding).where(
+            ContentEmbedding.title_id.in_(centroid_ids)
+        )
+    )
+    emb_rows = emb_q.fetchall()
+    if not emb_rows:
+        return []
+
+    # Weight thumbs-up titles 2x by duplicating their embedding vectors.
+    vectors = []
+    for row in emb_rows:
+        vectors.append(row.embedding)
+        if row.title_id in rated_ids:
+            vectors.append(row.embedding)
 
     centroid = np.mean(vectors, axis=0).tolist()
 
@@ -157,7 +177,7 @@ async def get_for_you_rail(
     vec_str = "[" + ",".join(str(float(v)) for v in centroid) + "]"
 
     age_filter = ""
-    bind_kw: dict = dict(query_vec=vec_str, lim=limit, excluded_ids=list(interacted_ids))
+    bind_kw: dict = dict(query_vec=vec_str, lim=limit, excluded_ids=list(excluded_ids))
     extra_params = [bindparam("excluded_ids", expanding=True)]
     if allowed_ratings is not None:
         age_filter = "AND t.age_rating IN :allowed"
@@ -241,6 +261,51 @@ async def _continue_watching_rail(
     ]
 
 
+async def _watchlist_rail(
+    db: AsyncSession,
+    profile_id: uuid.UUID,
+    limit: int = 20,
+    *,
+    allowed_ratings: list[str] | None = None,
+) -> list[dict]:
+    """Fetch the profile's watchlist titles, most recently added first."""
+    age_filter = ""
+    bind_kw: dict = dict(pid=profile_id, lim=limit)
+    extra_params = []
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+    stmt = text(
+        f"""
+        SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
+               t.synopsis_short, t.release_year, t.age_rating
+        FROM watchlist w
+        JOIN titles t ON t.id = w.title_id
+        WHERE w.profile_id = :pid {age_filter}
+        ORDER BY w.added_at DESC
+        LIMIT :lim
+        """
+    )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw))
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "title_type": r.title_type,
+            "poster_url": r.poster_url,
+            "landscape_url": r.landscape_url,
+            "synopsis_short": r.synopsis_short,
+            "release_year": r.release_year,
+            "age_rating": r.age_rating,
+            "similarity_score": None,
+        }
+        for r in result.fetchall()
+    ]
+
+
 async def _new_releases_rail(
     db: AsyncSession, limit: int = 20, *, allowed_ratings: list[str] | None = None
 ) -> list[dict]:
@@ -254,31 +319,30 @@ async def _new_releases_rail(
 async def _trending_rail(
     db: AsyncSession, limit: int = 20, *, allowed_ratings: list[str] | None = None
 ) -> list[dict]:
-    """Titles with the most bookmarks (proxy for popularity)."""
+    """Titles ranked by time-decayed bookmark popularity (7-day half-life)."""
     age_filter = ""
     bind_kw: dict = dict(lim=limit)
     extra_params = []
     if allowed_ratings is not None:
-        age_filter = "WHERE t.age_rating IN :allowed"
+        age_filter = "AND t.age_rating IN :allowed"
         bind_kw["allowed"] = list(allowed_ratings)
         extra_params.append(bindparam("allowed", expanding=True))
     stmt = text(
         f"""
         SELECT t.id, t.title, t.title_type, t.poster_url, t.landscape_url,
                t.synopsis_short, t.release_year, t.age_rating,
-               COUNT(b.id) AS bm_count
+               SUM(EXP(-EXTRACT(EPOCH FROM (NOW() - b.updated_at)) / (7 * 86400))) AS decay_score
         FROM titles t
         LEFT JOIN bookmarks b ON b.content_id = t.id
-        {age_filter}
+        WHERE b.id IS NOT NULL {age_filter}
         GROUP BY t.id
-        ORDER BY bm_count DESC
+        ORDER BY decay_score DESC
         LIMIT :lim
         """
     )
     if extra_params:
         stmt = stmt.bindparams(*extra_params)
-    result = await db.execute(stmt.params(**bind_kw)
-    )
+    result = await db.execute(stmt.params(**bind_kw))
     return [
         {
             "id": r.id,
@@ -510,12 +574,21 @@ async def get_home_rails(
     if cw_items:
         rails.append({"name": "Continue Watching", "rail_type": "continue_watching", "items": cw_items})
 
-    # 2. For You (only if there is viewing history)
+    # 2. My List (watchlist)
+    wl_items = await _watchlist_rail(db, profile_id, allowed_ratings=allowed_ratings)
+    if wl_items:
+        rails.append({"name": "My List", "rail_type": "watchlist", "items": wl_items})
+
+    # 3. For You — or "Popular Now" cold-start fallback for new profiles
     fy_items = await get_for_you_rail(db, profile_id, allowed_ratings=allowed_ratings)
     if fy_items:
         rails.append({"name": "For You", "rail_type": "for_you", "items": fy_items})
+    else:
+        popular_items = await _trending_rail(db, allowed_ratings=allowed_ratings)
+        if popular_items:
+            rails.append({"name": "Popular Now", "rail_type": "popular_now", "items": popular_items})
 
-    # 3. New Releases
+    # 4. New Releases
     nr_items = await _new_releases_rail(db, allowed_ratings=allowed_ratings)
     if nr_items:
         rails.append({"name": "New Releases", "rail_type": "new_releases", "items": nr_items})
@@ -533,6 +606,85 @@ async def get_home_rails(
     return rails
 
 
+async def get_personalized_featured_titles(
+    db: AsyncSession,
+    profile_id: uuid.UUID,
+    *,
+    allowed_ratings: list[str] | None = None,
+) -> list[uuid.UUID] | None:
+    """Return featured title IDs sorted by cosine similarity to profile preferences.
+
+    Returns ``None`` when the profile has no interactions (caller should fall back
+    to the default ``created_at DESC`` order).
+    """
+    # Compute profile centroid (same logic as get_for_you_rail).
+    bookmark_q = await db.execute(
+        select(Bookmark.content_id).where(Bookmark.profile_id == profile_id)
+    )
+    bookmarked_ids = {row[0] for row in bookmark_q.fetchall()}
+
+    rating_q = await db.execute(
+        select(Rating.title_id).where(
+            Rating.profile_id == profile_id,
+            Rating.rating == 1,
+        )
+    )
+    rated_ids = {row[0] for row in rating_q.fetchall()}
+
+    thumbs_down_q = await db.execute(
+        select(Rating.title_id).where(
+            Rating.profile_id == profile_id,
+            Rating.rating == -1,
+        )
+    )
+    thumbs_down_ids = {row[0] for row in thumbs_down_q.fetchall()}
+
+    centroid_ids = (bookmarked_ids | rated_ids) - thumbs_down_ids
+    if not centroid_ids:
+        return None
+
+    emb_q = await db.execute(
+        select(ContentEmbedding.title_id, ContentEmbedding.embedding).where(
+            ContentEmbedding.title_id.in_(centroid_ids)
+        )
+    )
+    emb_rows = emb_q.fetchall()
+    if not emb_rows:
+        return None
+
+    vectors = []
+    for row in emb_rows:
+        vectors.append(row.embedding)
+        if row.title_id in rated_ids:
+            vectors.append(row.embedding)
+
+    centroid = np.mean(vectors, axis=0).tolist()
+    vec_str = "[" + ",".join(str(float(v)) for v in centroid) + "]"
+
+    # Fetch featured title IDs sorted by cosine similarity to centroid.
+    age_filter = ""
+    bind_kw: dict = dict(query_vec=vec_str)
+    extra_params = []
+    if allowed_ratings is not None:
+        age_filter = "AND t.age_rating IN :allowed"
+        bind_kw["allowed"] = list(allowed_ratings)
+        extra_params.append(bindparam("allowed", expanding=True))
+
+    stmt = text(
+        f"""
+        SELECT t.id
+        FROM titles t
+        JOIN content_embeddings ce ON ce.title_id = t.id
+        WHERE t.is_featured = true {age_filter}
+        ORDER BY ce.embedding <=> CAST(:query_vec AS vector)
+        """
+    )
+    if extra_params:
+        stmt = stmt.bindparams(*extra_params)
+    result = await db.execute(stmt.params(**bind_kw))
+    return [row.id for row in result.fetchall()]
+
+
 async def get_post_play(
     db: AsyncSession,
     title_id: uuid.UUID,
@@ -540,5 +692,83 @@ async def get_post_play(
     *,
     allowed_ratings: list[str] | None = None,
 ) -> list[dict]:
-    """Post-play suggestions -- reuses the similarity engine."""
-    return await get_similar_titles(db, title_id, limit=limit, allowed_ratings=allowed_ratings)
+    """Post-play suggestions with next-episode awareness.
+
+    If *title_id* is an episode, the next sequential episode is prepended to the
+    similarity-based suggestions.  Handles episode-number gaps by using
+    ``episode_number > current ORDER BY ASC LIMIT 1``.
+    """
+    suggestions: list[dict] = []
+
+    # Check if title_id is an episode and find the next one.
+    ep_q = await db.execute(
+        text(
+            """
+            SELECT e.episode_number, e.season_id,
+                   s.season_number, s.title_id AS series_id
+            FROM episodes e
+            JOIN seasons s ON s.id = e.season_id
+            WHERE e.id = :tid
+            """
+        ).bindparams(tid=title_id)
+    )
+    ep_row = ep_q.first()
+
+    if ep_row is not None:
+        # Try next episode in the same season (handles gaps).
+        next_ep_q = await db.execute(
+            text(
+                """
+                SELECT e.id, e.title, e.duration_minutes, e.hls_manifest_url,
+                       s.season_number, e.episode_number
+                FROM episodes e
+                JOIN seasons s ON s.id = e.season_id
+                WHERE e.season_id = :sid AND e.episode_number > :ep_num
+                ORDER BY e.episode_number ASC
+                LIMIT 1
+                """
+            ).bindparams(sid=ep_row.season_id, ep_num=ep_row.episode_number)
+        )
+        next_ep = next_ep_q.first()
+
+        # If no more episodes in this season, try first episode of next season.
+        if next_ep is None:
+            next_ep_q = await db.execute(
+                text(
+                    """
+                    SELECT e.id, e.title, e.duration_minutes, e.hls_manifest_url,
+                           s.season_number, e.episode_number
+                    FROM seasons s
+                    JOIN episodes e ON e.season_id = s.id
+                    WHERE s.title_id = :series_id AND s.season_number > :s_num
+                    ORDER BY s.season_number ASC, e.episode_number ASC
+                    LIMIT 1
+                    """
+                ).bindparams(series_id=ep_row.series_id, s_num=ep_row.season_number)
+            )
+            next_ep = next_ep_q.first()
+
+        if next_ep is not None:
+            # Fetch the series title for display context.
+            series_q = await db.execute(
+                select(Title).where(Title.id == ep_row.series_id)
+            )
+            series_title = series_q.scalar_one_or_none()
+            suggestions.append({
+                "id": next_ep.id,
+                "title": next_ep.title,
+                "title_type": "episode",
+                "poster_url": series_title.poster_url if series_title else None,
+                "landscape_url": series_title.landscape_url if series_title else None,
+                "synopsis_short": f"S{next_ep.season_number}E{next_ep.episode_number}",
+                "release_year": series_title.release_year if series_title else None,
+                "age_rating": series_title.age_rating if series_title else None,
+                "similarity_score": None,
+            })
+
+    # Fill remaining slots with similar titles.
+    similar = await get_similar_titles(
+        db, title_id, limit=limit - len(suggestions), allowed_ratings=allowed_ratings
+    )
+    suggestions.extend(similar)
+    return suggestions
