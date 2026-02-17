@@ -229,10 +229,10 @@ Title "Inception":
 
 ## Recommended Feature Groupings
 
-### Feature 010 — Recommendations Quality & Watchlist Rail
-**~1 week | No new DB tables | No new endpoints**
+### Feature 010 — Recommendations Quality, Watchlist Rail & Live TV Playback
+**~1 week | No new DB tables | No new endpoints (1 frontend fix)**
 
-Fixes the highest-ROI bugs with zero schema risk. All changes are service-layer only.
+Fixes the highest-ROI bugs with zero schema risk. All changes are service-layer only, plus unblocking live TV playback which is pure frontend wiring.
 
 - R-01 Fix thumbs-down exclusion *(bug fix)*
 - R-02 Boost thumbs-up weighting
@@ -243,6 +243,7 @@ Fixes the highest-ROI bugs with zero schema risk. All changes are service-layer 
 - R-11 Personalized featured titles (hero banner)
 - A-06 IVFFlat index on embeddings *(migration only)*
 - S-01 Semantic search genre N+1 fix
+- L-01 EPG click-to-play *(frontend wiring — `hls_live_url` already populated)*
 
 ---
 
@@ -269,7 +270,6 @@ Activates the subscription model (90% already modeled) and adds full TVOD rent/b
 
 Unblocks the dead EPG click handler and adds meaningful EPG improvements.
 
-- L-01 EPG click-to-play *(unblocks live TV)*
 - L-02 Multi-day EPG batch endpoint *(N×1 → 1 request)*
 - L-03 EPG now-playing N+1 fix
 - L-04 Channel genre filter
