@@ -18,6 +18,7 @@ export default function WatchlistPage() {
     mutationFn: (titleId: string) => removeFromWatchlist(profile!.id, titleId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist'] })
+      queryClient.invalidateQueries({ queryKey: ['recommendations', 'home'] })
     },
   })
 

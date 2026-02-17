@@ -1,6 +1,7 @@
 """Hybrid search service — keyword, semantic (pgvector), and RRF-merged search."""
 
 import logging
+import uuid
 
 from sqlalchemy import bindparam, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -138,19 +139,27 @@ async def semantic_search(
         stmt = stmt.bindparams(*extra_params)
     result = await db.execute(stmt.params(**bind_kw))
 
-    hits: list[dict] = []
-    for r in result.fetchall():
-        # Fetch genres for this title
-        genre_q = await db.execute(
-            text(
-                "SELECT g.name FROM genres g "
-                "JOIN title_genres tg ON tg.genre_id = g.id "
-                "WHERE tg.title_id = :tid"
-            ).bindparams(tid=r.id)
-        )
-        genre_names = [row[0] for row in genre_q.fetchall()]
+    rows = result.fetchall()
+    if not rows:
+        return []
 
-        hits.append({
+    # Batch-fetch genres for all result titles in a single query (fixes N+1).
+    title_ids = [r.id for r in rows]
+    genre_q = await db.execute(
+        text(
+            "SELECT tg.title_id, g.name "
+            "FROM title_genres tg "
+            "JOIN genres g ON g.id = tg.genre_id "
+            "WHERE tg.title_id IN :title_ids"
+        ).bindparams(bindparam("title_ids", expanding=True)),
+        {"title_ids": title_ids},
+    )
+    genre_map: dict[uuid.UUID, list[str]] = {}
+    for gr in genre_q.fetchall():
+        genre_map.setdefault(gr.title_id, []).append(gr.name)
+
+    return [
+        {
             "id": r.id,
             "title": r.title,
             "title_type": r.title_type,
@@ -162,10 +171,11 @@ async def semantic_search(
             "landscape_url": r.landscape_url,
             "is_featured": r.is_featured,
             "mood_tags": list(r.mood_tags) if r.mood_tags else None,
-            "genres": genre_names,
+            "genres": genre_map.get(r.id, []),
             "similarity_score": float(r.similarity),
-        })
-    return hits
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

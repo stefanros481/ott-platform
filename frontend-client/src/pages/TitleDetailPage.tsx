@@ -53,6 +53,7 @@ export default function TitleDetailPage() {
       : addToWatchlist(profile!.id, id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist'] })
+      queryClient.invalidateQueries({ queryKey: ['recommendations', 'home'] })
     },
   })
 

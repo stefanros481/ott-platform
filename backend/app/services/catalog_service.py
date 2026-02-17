@@ -99,9 +99,16 @@ async def get_genres(db: AsyncSession) -> list[Genre]:
 
 
 async def get_featured_titles(
-    db: AsyncSession, *, allowed_ratings: list[str] | None = None
+    db: AsyncSession,
+    *,
+    allowed_ratings: list[str] | None = None,
+    profile_id: uuid.UUID | None = None,
 ) -> list[Title]:
-    """Return titles flagged as featured (for the hero banner)."""
+    """Return titles flagged as featured (for the hero banner).
+
+    When *profile_id* is provided, titles are sorted by cosine similarity to the
+    profile's viewing preferences.  Falls back to ``created_at DESC`` for new profiles.
+    """
     query = (
         select(Title)
         .where(Title.is_featured.is_(True))
@@ -113,4 +120,17 @@ async def get_featured_titles(
     if allowed_ratings is not None:
         query = query.where(Title.age_rating.in_(allowed_ratings))
     result = await db.execute(query)
-    return list(result.scalars().unique())
+    titles = list(result.scalars().unique())
+
+    # Apply personalized sorting when a profile is provided.
+    if profile_id is not None and titles:
+        from app.services.recommendation_service import get_personalized_featured_titles
+
+        sorted_ids = await get_personalized_featured_titles(
+            db, profile_id, allowed_ratings=allowed_ratings
+        )
+        if sorted_ids is not None:
+            id_order = {tid: i for i, tid in enumerate(sorted_ids)}
+            titles.sort(key=lambda t: id_order.get(t.id, len(sorted_ids)))
+
+    return titles

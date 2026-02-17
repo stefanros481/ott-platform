@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getChannels, getSchedule, type Channel, type ScheduleEntry } from '../api/epg'
@@ -22,8 +23,10 @@ function formatDateLabel(date: Date): string {
 
 export default function EpgPage() {
   const { profile } = useAuth()
+  const navigate = useNavigate()
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [programInfo, setProgramInfo] = useState<{ entry: ScheduleEntry; channel: Channel } | null>(null)
   // Update current time every minute
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 60000)
@@ -75,9 +78,21 @@ export default function EpgPage() {
 
   const isLoading = channelsLoading || scheduleLoading
 
-  const handleProgramClick = (_entry: ScheduleEntry, _channel: Channel) => {
-    // In a full implementation, this could navigate to the program detail or start playback
-  }
+  const handleProgramClick = useCallback((entry: ScheduleEntry, channel: Channel) => {
+    const now = new Date()
+    const start = new Date(entry.start_time)
+    const end = new Date(entry.end_time)
+    const isCurrentlyAiring = now >= start && now < end
+
+    if (isCurrentlyAiring) {
+      navigate(`/play/live/${channel.id}`, {
+        state: { channel, currentProgram: entry },
+      })
+    } else {
+      // Show program info for past/future programs
+      setProgramInfo({ entry, channel })
+    }
+  }, [navigate])
 
   return (
     <div className="h-screen pt-14 flex flex-col">
@@ -131,6 +146,30 @@ export default function EpgPage() {
           </div>
         )}
       </div>
+
+      {/* Program info overlay for past/future programs */}
+      {programInfo && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setProgramInfo(null)}>
+          <div className="bg-surface-raised rounded-xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-white mb-1">{programInfo.entry.title}</h3>
+            <p className="text-sm text-gray-400 mb-3">
+              {programInfo.channel.name} &middot;{' '}
+              {new Date(programInfo.entry.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {' - '}
+              {new Date(programInfo.entry.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </p>
+            {programInfo.entry.synopsis && (
+              <p className="text-sm text-gray-300 mb-4">{programInfo.entry.synopsis}</p>
+            )}
+            <button
+              onClick={() => setProgramInfo(null)}
+              className="w-full py-2 bg-surface-overlay text-white rounded-lg hover:bg-white/10 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

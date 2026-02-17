@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getTitleById } from '../api/catalog'
 import { getBookmarkByContent } from '../api/viewing'
+import { type Channel, type ScheduleEntry, getSchedule } from '../api/epg'
 import { useBookmarkSync } from '../hooks/useBookmarkSync'
 import { useViewingTime, useHeartbeat } from '../hooks/useViewingTime'
 import LockScreen from '../components/LockScreen'
@@ -21,6 +22,7 @@ function formatTime(seconds: number): string {
 export default function PlayerPage() {
   const { type, id } = useParams<{ type: string; id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { profile } = useAuth()
   const queryClient = useQueryClient()
   const [nextEpisodeCountdown, setNextEpisodeCountdown] = useState<number | null>(null)
@@ -29,16 +31,41 @@ export default function PlayerPage() {
   const [startPosition, setStartPosition] = useState<number | undefined>(undefined)
   const [resumePromptDismissed, setResumePromptDismissed] = useState(false)
 
-  // For movies, id is the title ID. For episodes, we need to find the parent title.
-  // In a real app, we would have a dedicated episode endpoint. For this PoC, we fetch the title.
+  // Live TV state — channel from route state, program can update on transition
+  const isLive = type === 'live'
+  const routeState = location.state as { channel?: Channel; currentProgram?: ScheduleEntry } | null
+  const liveChannel = isLive ? routeState?.channel ?? null : null
+  const [liveProgram, setLiveProgram] = useState<ScheduleEntry | null>(routeState?.currentProgram ?? null)
+  const liveProgramRef = useRef(liveProgram)
+  liveProgramRef.current = liveProgram
+
+  // For movies/episodes, fetch title data. Skip for live TV.
   const { data: title, isLoading } = useQuery({
     queryKey: ['title', id],
     queryFn: () => getTitleById(id!),
-    enabled: !!id,
+    enabled: !!id && !isLive,
   })
 
   // Derive playback info from title data without calling setState during render
   const playbackInfo = useMemo(() => {
+    // Live TV — data comes from route state, not title query
+    if (isLive) {
+      if (!liveChannel?.hls_live_url) {
+        return { manifestUrl: '', displayTitle: liveChannel?.name ?? 'Channel temporarily unavailable', contentType: 'movie' as const, contentId: id || '', nextEpisodeId: null as string | null }
+      }
+      const program = liveProgram
+      const timeSlot = program
+        ? `${new Date(program.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – ${new Date(program.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : ''
+      return {
+        manifestUrl: liveChannel.hls_live_url,
+        displayTitle: program ? `${program.title} — ${timeSlot}` : liveChannel.name,
+        contentType: 'movie' as const,
+        contentId: id || '',
+        nextEpisodeId: null as string | null,
+      }
+    }
+
     if (!title) return { manifestUrl: '', displayTitle: '', contentType: 'movie' as const, contentId: id || '', nextEpisodeId: null as string | null }
 
     if (type === 'movie') {
@@ -83,7 +110,7 @@ export default function PlayerPage() {
     }
 
     return { manifestUrl: '', displayTitle: '', contentType: 'movie' as const, contentId: id || '', nextEpisodeId: null }
-  }, [title, type, id])
+  }, [title, type, id, isLive, liveChannel, liveProgram])
 
   const { manifestUrl, displayTitle, contentType, contentId, nextEpisodeId } = playbackInfo
 
@@ -91,7 +118,7 @@ export default function PlayerPage() {
   const { data: existingBookmark, isLoading: bookmarkLoading } = useQuery({
     queryKey: ['bookmark', profile?.id, contentId],
     queryFn: () => getBookmarkByContent(profile!.id, contentId),
-    enabled: !!profile && !!contentId && contentId !== '',
+    enabled: !!profile && !!contentId && contentId !== '' && !isLive,
     gcTime: 0,
     staleTime: 0,
   })
@@ -174,9 +201,39 @@ export default function PlayerPage() {
   }, [existingBookmark])
 
   const handleStartOver = useCallback(() => {
-    setStartPosition(0)
+    if (isLive && liveProgramRef.current) {
+      // Seek backward from live edge by the elapsed program time
+      const elapsed = (Date.now() - new Date(liveProgramRef.current.start_time).getTime()) / 1000
+      setStartPosition(-Math.max(0, elapsed))
+    } else {
+      setStartPosition(0)
+    }
     setResumePromptDismissed(true)
-  }, [])
+  }, [isLive])
+
+  // Live TV: schedule a timer at program end_time to fetch the next program
+  useEffect(() => {
+    if (!isLive || !liveProgram || !liveChannel) return
+    const endTime = new Date(liveProgram.end_time).getTime()
+    const delay = endTime - Date.now()
+    if (delay <= 0) return // program already ended
+
+    const timer = setTimeout(async () => {
+      try {
+        const today = new Date().toISOString().split('T')[0]!
+        const schedule = await getSchedule(liveChannel.id, today)
+        const now = Date.now()
+        const next = schedule.find(
+          (entry) => new Date(entry.start_time).getTime() <= now && new Date(entry.end_time).getTime() > now
+        )
+        if (next) setLiveProgram(next)
+      } catch {
+        // Silently continue — display title stays as channel name
+      }
+    }, delay + 1000) // +1s buffer to ensure the new program has started
+
+    return () => clearTimeout(timer)
+  }, [isLive, liveProgram, liveChannel])
 
   // Invalidate continue-watching cache on unmount so home page fetches fresh data.
   // Small delay gives the unmount bookmark save time to reach the server.
@@ -217,7 +274,7 @@ export default function PlayerPage() {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-400 text-lg mb-4">No playback source available</p>
+          <p className="text-gray-400 text-lg mb-4">{isLive ? 'Channel temporarily unavailable' : 'No playback source available'}</p>
           <button
             onClick={() => navigate(-1)}
             className="px-6 py-2.5 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors"
