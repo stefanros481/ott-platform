@@ -90,3 +90,33 @@ class EmbeddingGenerationResponse(BaseModel):
     """Result of a bulk embedding generation run."""
 
     new_embeddings_created: int
+
+
+# ---------------------------------------------------------------------------
+# Performance Metrics (009-backend-performance)
+# ---------------------------------------------------------------------------
+
+
+class HeartbeatMetrics(BaseModel):
+    total_processed: int
+    avg_db_ops_per_heartbeat: float
+    avg_duration_ms: float
+    max_duration_ms: float
+    p95_duration_ms: float = 0.0
+
+
+class CacheMetrics(BaseModel):
+    hit_rate: float = Field(ge=0, le=1)
+    total_hits: int
+    total_misses: int
+    total_invalidations: int
+    current_size: int
+    max_size: int
+
+
+class PerformanceMetricsResponse(BaseModel):
+    """Response for GET /api/v1/admin/metrics."""
+
+    uptime_seconds: float
+    heartbeat: HeartbeatMetrics
+    config_cache: CacheMetrics

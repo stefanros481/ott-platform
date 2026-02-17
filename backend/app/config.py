@@ -1,3 +1,5 @@
+import functools
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
-    @property
+    @functools.cached_property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
 
