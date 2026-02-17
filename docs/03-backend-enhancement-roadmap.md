@@ -4,7 +4,7 @@
 
 The platform is feature-complete for a Phase 1 PoC: all 9 features (001–009) are merged to main.
 The client is fully wired to 38 endpoints with proper error handling, retries, and offline fallback.
-This document inventories every meaningful backend enhancement and groups them into 5 shippable features (010–014). Each feature gets a detailed spec via `/speckit.specify` when implementation begins.
+This document inventories every meaningful backend enhancement and groups them into 6 shippable features (010–015). Each feature gets a detailed spec via `/speckit.specify` when implementation begins.
 
 **Key infrastructure already in place:**
 - pgvector embeddings (384-dim, SentenceTransformer)
@@ -166,6 +166,65 @@ Title "Inception":
 | AU-07 | **Admin session management** — separate refresh tokens with shorter lifetime (1 day vs 7 days); `POST /admin/auth/revoke-all` to invalidate all admin sessions | M | Medium | Incident response: one-click lockout of all admin sessions |
 | AU-08 | **Role-based admin permissions** — add `admin_role` field (`super_admin`, `catalog_editor`, `user_support`, `viewer`); check role against required permission per endpoint | M | High | Replaces all-or-nothing `is_admin`; prerequisite for multi-team ops |
 
+### Category 12 — Content Operations & Ingest
+
+**Context:** The platform currently has single-item CRUD only. There is no way to bulk-import EPG schedules, VOD metadata, or manage content lifecycle. Every title, episode, and schedule entry must be created one at a time via the admin API. This is a hard blocker for any real content operation.
+
+**EPG Ingest:**
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| CO-01 | **XMLTV import endpoint** — `POST /admin/epg/import/xmltv` parses standard XMLTV format, maps channels by `channel_number` or `display-name`, creates/updates schedule entries in bulk | L | High | Industry standard; every EPG provider exports XMLTV |
+| CO-02 | **Bulk schedule replacement** — `PUT /admin/schedule/bulk` replaces an entire channel's schedule for a date range in one transaction; validates no overlaps | M | High | Needed for daily EPG updates from providers |
+| CO-03 | **Schedule conflict detection** — validate overlapping programs on same channel before committing; return detailed error with conflicting entries | S | Medium | Prevents data quality issues from manual or bulk entry |
+| CO-04 | **Recurring program templates** — define weekly recurring shows (e.g. "News at 9pm Mon–Fri"); auto-generate schedule entries from template | L | Medium | Reduces manual schedule management for regular programming |
+
+**VOD Metadata Import:**
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| CO-05 | **Bulk title import (JSON/CSV)** — `POST /admin/titles/import` accepts array of titles with seasons/episodes/cast/genres; upsert logic (create or update by external ID); returns per-item success/error report | L | High | Supersedes O-03; essential for catalog onboarding |
+| CO-06 | **External metadata enrichment (TMDB)** — `POST /admin/titles/{id}/enrich/tmdb` fetches poster, synopsis, cast, genres, release year from TMDB API by title search or external ID | M | High | Free API with 95%+ coverage of movies/series |
+| CO-07 | **Bulk metadata update** — `PATCH /admin/titles/bulk` updates specific fields across multiple titles (e.g. set `age_rating` for 50 titles at once) | M | Medium | Operational efficiency for editorial corrections |
+| CO-08 | **Metadata completeness dashboard** — `GET /admin/titles/completeness` returns titles grouped by missing fields (no poster, no synopsis, no embedding, no mood tags) with counts and IDs | S | Medium | Supersedes A-04; helps editorial prioritize |
+| CO-09 | **External ID field on Title** — add `external_id` (nullable, unique) to Title model for TMDB/IMDB/provider IDs; used as upsert key for imports | S | High | Prerequisite for CO-05, CO-06; prevents duplicate imports |
+
+**Content Lifecycle:**
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| CO-10 | **Content status field** — add `status` enum to Title (`draft`, `published`, `archived`); catalog/search only returns `published` titles; admin sees all | M | High | Currently all titles are implicitly published; no way to stage content |
+| CO-11 | **Availability windows** — add `available_from` and `available_until` to Title; catalog automatically filters by current date; admin endpoint to list expiring content | M | High | Licensing compliance; time-limited content rights |
+| CO-12 | **Publish scheduling** — set `status=draft` + `available_from` in the future; background task auto-publishes when date arrives | M | Medium | "Content goes live at midnight" use case |
+
+**Asset Validation:**
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| CO-13 | **HLS manifest health check** — `GET /admin/titles/{id}/validate-stream` fetches the HLS manifest URL, confirms it returns valid M3U8, reports codec/resolution info | M | Medium | Catches broken streams before users see errors |
+| CO-14 | **Bulk asset validation** — `POST /admin/titles/validate-assets` checks poster URLs, landscape URLs, and HLS URLs for all titles; returns broken/missing report | M | Medium | Operational health check for asset integrity |
+
+**Data Export:**
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| CO-15 | **Title catalog export** — `GET /admin/titles/export?format=csv|json` exports full catalog with metadata, genres, cast | M | Medium | BI reporting, backup, migration to other systems |
+| CO-16 | **Schedule export** — `GET /admin/schedule/export?format=xmltv|csv&channel_id=...&date_from=...` exports schedule in XMLTV or CSV | M | Medium | Data portability; feed downstream systems |
+| CO-17 | **User export** — `GET /admin/users/export?format=csv` exports user list with subscription tiers, profile counts, signup dates (no passwords/hashes) | S | Medium | GDPR compliance, analytics, CRM integration |
+
+### Category 13 — User Administration
+
+**Context:** Admin user management is currently read-only (list users). There is no way to suspend accounts, manage subscriptions, reset PINs, or view user activity.
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| UA-01 | **User detail endpoint** — `GET /admin/users/{id}` returns full user with profiles, subscription history, entitlements, recent viewing activity | S | High | Basic requirement for any support team |
+| UA-02 | **User suspend/activate** — `PATCH /admin/users/{id}/status` sets `is_active=false/true`; suspended users' tokens are immediately invalidated | M | High | Account abuse, payment fraud, GDPR right-to-restrict |
+| UA-03 | **Manual entitlement grant** — `POST /admin/users/{id}/entitlements` grants a package or TVOD entitlement with optional expiry (promo, support resolution, press account) | M | High | Depends on E-01; essential for customer support ops |
+| UA-04 | **Admin PIN reset** — `DELETE /admin/users/{id}/pin` resets a user's parental control PIN and clears lockout; user must re-create via normal flow | S | Medium | Support scenario: user forgot PIN, locked out |
+| UA-05 | **Force logout** — `DELETE /admin/users/{id}/sessions` revokes all refresh tokens for a user, forcing re-login on all devices | S | Medium | Security incident response; stolen device |
+| UA-06 | **User search** — `GET /admin/users?email=...&tier=...&created_after=...` with filtering by email, subscription tier, admin status, active status, signup date range | M | Medium | Currently no search/filter on user list |
+
 ---
 
 ## Recommended Feature Groupings
@@ -250,17 +309,51 @@ Fully separates admin auth from end-user auth. Admins get their own login, short
 - AU-07 Admin session management *(separate refresh tokens, revoke-all)*
 - AU-08 Role-based admin permissions *(replaces boolean `is_admin`)*
 
+### Feature 015 — Content Operations & User Administration
+**~2.5 weeks | 1 migration (status + external_id + availability fields) | ~15 new endpoints**
+
+The operational backbone: bulk import, XMLTV ingest, content lifecycle, asset validation, data export, and user management. Without this, every content operation is manual one-at-a-time work.
+
+**Phase A — Foundation (do first):**
+- CO-09 External ID field on Title *(prerequisite for imports)*
+- CO-10 Content status field *(draft/published/archived)*
+- CO-11 Availability windows *(available_from/available_until)*
+- UA-01 User detail endpoint
+- UA-02 User suspend/activate
+- UA-06 User search with filters
+
+**Phase B — Import/Export:**
+- CO-01 XMLTV import endpoint *(EPG ingest)*
+- CO-02 Bulk schedule replacement
+- CO-05 Bulk title import (JSON/CSV)
+- CO-06 External metadata enrichment (TMDB)
+- CO-15 Title catalog export
+- CO-16 Schedule export (XMLTV/CSV)
+- CO-17 User export
+
+**Phase C — Operational Quality:**
+- CO-03 Schedule conflict detection
+- CO-07 Bulk metadata update
+- CO-08 Metadata completeness dashboard
+- CO-13 HLS manifest health check
+- CO-14 Bulk asset validation
+- CO-12 Publish scheduling
+- UA-03 Manual entitlement grant *(depends on 011)*
+- UA-04 Admin PIN reset
+- UA-05 Force logout
+
 ---
 
 ## Suggested Execution Order
 
 ```
-010 (Recommendations) → 011 (Entitlements) → 014 (Admin Auth) → 012 (EPG/Live TV) → 013 (AI + Notifications)
+010 (Recommendations) → 011 (Entitlements) → 015 (Content Ops) → 014 (Admin Auth) → 012 (EPG/Live TV) → 013 (AI + Notifications)
 ```
 
 010 has zero dependencies and the highest immediate user-visible impact.
-011 is a prerequisite for 012 (entitled channel filtering).
-014 slots after 011 because entitlement admin CRUD benefits from audit logging and role checks.
+011 is a prerequisite for 012 (entitled channel filtering) and 015 (entitlement grants).
+015 comes next because content operations are a hard prerequisite for running the platform — you cannot manage a catalog or EPG schedule without bulk import and lifecycle tooling.
+014 slots after 015 because audit logging and role checks immediately cover the new content ops endpoints.
 012 depends on 011 (entitled channels).
 013 last due to external LLM dependency and broadest scope.
 
@@ -272,6 +365,7 @@ Fully separates admin auth from end-user auth. Admins get their own login, short
 |---------|-----------|
 | 010 | `backend/app/services/recommendation_service.py` |
 | 011 | `backend/app/models/entitlement.py` (add `TitleOffer`), `backend/app/routers/admin.py`, new `backend/app/routers/offers.py` |
+| 015 | `backend/app/models/catalog.py` (add `status`, `external_id`, `available_from/until`), `backend/app/routers/admin.py` (bulk endpoints), new `backend/app/services/import_service.py`, new `backend/app/services/xmltv_parser.py` |
 | 014 | `backend/app/dependencies.py`, `backend/app/services/auth_service.py`, `backend/app/routers/auth.py`, new `backend/app/routers/admin_auth.py`, `frontend-admin/src/context/AuthContext.tsx` |
 | 012 | `backend/app/routers/epg.py`, `backend/app/services/epg_service.py`, `frontend-client/src/pages/EpgPage.tsx` (L78–80) |
 | 013 | `backend/app/routers/admin.py`, new `backend/app/services/enrichment_service.py`, new `backend/app/routers/notifications.py` |
