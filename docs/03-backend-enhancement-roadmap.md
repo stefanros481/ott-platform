@@ -1,10 +1,10 @@
-# Backend Enhancement Plan
+# Backend Enhancement Roadmap
 
 ## Context
 
 The platform is feature-complete for a Phase 1 PoC: all 9 features (001–009) are merged to main.
 The client is fully wired to 38 endpoints with proper error handling, retries, and offline fallback.
-This document inventories every meaningful backend enhancement and groups them into 4 shippable features.
+This document inventories every meaningful backend enhancement and groups them into 5 shippable features (010–014). Each feature gets a detailed spec via `/speckit.specify` when implementation begins.
 
 **Key infrastructure already in place:**
 - pgvector embeddings (384-dim, SentenceTransformer)
@@ -151,6 +151,21 @@ Title "Inception":
 | D-03 | **Integration test suite for recommendations** — pytest-asyncio tests for all 5 rails, cold-start, rating exclusion | L | High | No tests exist today |
 | D-04 | **OpenAPI enrichment** — add `summary`, `description`, `examples` to all route decorators | M | Low | DX improvement |
 
+### Category 11 — Admin Authentication & Separation
+
+**Context:** Currently admins and end users share the same login endpoint, JWT issuer, and password policy. `is_admin` is a single boolean baked into the JWT — if revoked in the DB, access persists until token expiry (up to 60 min). There is no audit trail, no MFA, and no way to restrict admin access by IP or role.
+
+| ID   | Description | Effort | Impact | Notes |
+|------|-------------|--------|--------|-------|
+| AU-01 | **Separate admin login endpoint** — `POST /api/v1/admin/auth/login`; rejects non-admin users at login time instead of at each route | S | High | Cleaner separation; admin frontend already exists at `frontend-admin/` |
+| AU-02 | **Dedicated admin JWT signing** — separate signing key + shorter TTL (15 min vs 60 min); admin tokens cannot be used on user endpoints and vice versa | M | High | Prevents token confusion; limits blast radius of leaked admin token |
+| AU-03 | **Real-time admin status check** — verify `is_admin` from DB on every admin request instead of trusting JWT claim alone | S | High | Closes the revocation window; instant admin deactivation |
+| AU-04 | **Admin MFA (TOTP)** — optional TOTP enrollment via `POST /admin/auth/mfa/setup`; required on admin login when enrolled | L | High | Industry standard for privileged access; Google Authenticator / Authy compatible |
+| AU-05 | **Admin IP allowlist** — configurable CIDR allowlist in settings; reject admin requests from non-allowed IPs before auth check | S | Medium | Defense in depth; optional, disabled by default |
+| AU-06 | **Admin audit log** — `admin_audit_log` table auto-populated on every admin write operation (create/update/delete) with user, action, resource, old/new values, timestamp | L | High | Supersedes O-04; regulatory and operational necessity |
+| AU-07 | **Admin session management** — separate refresh tokens with shorter lifetime (1 day vs 7 days); `POST /admin/auth/revoke-all` to invalidate all admin sessions | M | Medium | Incident response: one-click lockout of all admin sessions |
+| AU-08 | **Role-based admin permissions** — add `admin_role` field (`super_admin`, `catalog_editor`, `user_support`, `viewer`); check role against required permission per endpoint | M | High | Replaces all-or-nothing `is_admin`; prerequisite for multi-team ops |
+
 ---
 
 ## Recommended Feature Groupings
@@ -221,16 +236,32 @@ Populates the AI fields that embeddings and recommendations depend on, and build
 - O-01 Content analytics endpoint
 - O-02 User analytics endpoint
 
+### Feature 014 — Admin Authentication & Separation
+**~1.5 weeks | 1 new table (`admin_audit_log`) | ~5 new endpoints**
+
+Fully separates admin auth from end-user auth. Admins get their own login, shorter-lived tokens, optional MFA, audit logging, and role-based permissions.
+
+- AU-01 Separate admin login endpoint
+- AU-02 Dedicated admin JWT signing *(separate key + shorter TTL)*
+- AU-03 Real-time admin status check *(close revocation window)*
+- AU-04 Admin MFA (TOTP) *(optional, high-value)*
+- AU-05 Admin IP allowlist *(optional, defense in depth)*
+- AU-06 Admin audit log *(supersedes O-04)*
+- AU-07 Admin session management *(separate refresh tokens, revoke-all)*
+- AU-08 Role-based admin permissions *(replaces boolean `is_admin`)*
+
 ---
 
 ## Suggested Execution Order
 
 ```
-010 (Recommendations) → 011 (Entitlements) → 012 (EPG/Live TV) → 013 (AI + Notifications)
+010 (Recommendations) → 011 (Entitlements) → 014 (Admin Auth) → 012 (EPG/Live TV) → 013 (AI + Notifications)
 ```
 
 010 has zero dependencies and the highest immediate user-visible impact.
 011 is a prerequisite for 012 (entitled channel filtering).
+014 slots after 011 because entitlement admin CRUD benefits from audit logging and role checks.
+012 depends on 011 (entitled channels).
 013 last due to external LLM dependency and broadest scope.
 
 ---
@@ -241,5 +272,6 @@ Populates the AI fields that embeddings and recommendations depend on, and build
 |---------|-----------|
 | 010 | `backend/app/services/recommendation_service.py` |
 | 011 | `backend/app/models/entitlement.py` (add `TitleOffer`), `backend/app/routers/admin.py`, new `backend/app/routers/offers.py` |
+| 014 | `backend/app/dependencies.py`, `backend/app/services/auth_service.py`, `backend/app/routers/auth.py`, new `backend/app/routers/admin_auth.py`, `frontend-admin/src/context/AuthContext.tsx` |
 | 012 | `backend/app/routers/epg.py`, `backend/app/services/epg_service.py`, `frontend-client/src/pages/EpgPage.tsx` (L78–80) |
 | 013 | `backend/app/routers/admin.py`, new `backend/app/services/enrichment_service.py`, new `backend/app/routers/notifications.py` |
