@@ -95,6 +95,7 @@ class ViewingSession(Base):
 
     __table_args__ = (
         Index("ix_vs_profile_active", "profile_id", postgresql_where=text("ended_at IS NULL")),
+        # Migration 004 recreates this index with DESC on started_at for history queries
         Index("ix_vs_profile_started", "profile_id", "started_at"),
     )
 

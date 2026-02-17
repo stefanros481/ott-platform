@@ -16,10 +16,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         print("FATAL: JWT_SECRET must be at least 32 characters", file=sys.stderr)
         sys.exit(1)
 
+    # T021: Pre-warm one connection so first request avoids cold-start
+    from sqlalchemy import text
+
+    from app.database import async_session_factory, engine
+
+    async with async_session_factory() as session:
+        await session.execute(text("SELECT 1"))
+
     yield
     # Shutdown: dispose engine
-    from app.database import engine
-
     await engine.dispose()
 
 

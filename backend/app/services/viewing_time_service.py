@@ -1,15 +1,17 @@
 """Viewing time service — balance tracking, heartbeat processing, grants, history, reports."""
 
+import logging
+import time as time_mod
 import uuid
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload
 
 from app.models.catalog import Title
 from app.models.user import Profile
@@ -34,6 +36,8 @@ from app.schemas.viewing_time import (
     SessionEndResponse,
     ViewingTimeBalanceResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 # Heartbeat interval in seconds — each heartbeat increments usage by this amount
 HEARTBEAT_INTERVAL_SECONDS = 30
@@ -115,13 +119,17 @@ def _compute_next_reset(viewing_day: date, reset_hour: int, timezone: str) -> da
 async def get_balance(
     db: AsyncSession,
     profile_id: uuid.UUID,
+    profile: Profile | None = None,
 ) -> ViewingTimeBalanceResponse:
-    """Return current viewing time balance for *profile_id*."""
-    # Fetch profile to check is_kids
-    result = await db.execute(select(Profile).where(Profile.id == profile_id))
-    profile = result.scalar_one_or_none()
+    """Return current viewing time balance for *profile_id*.
+
+    When *profile* is provided (already loaded by caller), skips the DB fetch.
+    """
     if profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        result = await db.execute(select(Profile).where(Profile.id == profile_id))
+        profile = result.scalar_one_or_none()
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Profile not found")
 
     if not profile.is_kids:
         return ViewingTimeBalanceResponse(
@@ -202,25 +210,46 @@ async def process_heartbeat(
     Creates or updates a :class:`ViewingSession` and increments the daily
     usage balance unless the content is educational-exempt.
     """
+    hb_start = time_mod.monotonic()
     now = datetime.now(UTC)
+    db_op_count = 0
 
-    # Fetch profile
-    result = await db.execute(select(Profile).where(Profile.id == profile_id))
-    profile = result.scalar_one_or_none()
-    if profile is None:
+    # T007: Combined profile + config + title lookup in a single joined query
+    combined = await db.execute(
+        select(Profile, ViewingTimeConfig, Title)
+        .outerjoin(ViewingTimeConfig, ViewingTimeConfig.profile_id == Profile.id)
+        .outerjoin(Title, Title.id == title_id)
+        .where(Profile.id == profile_id)
+    )
+    row = combined.one_or_none()
+    db_op_count += 1
+
+    if row is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Fetch config (may be None for non-kids profiles)
-    config_result = await db.execute(
-        select(ViewingTimeConfig).where(ViewingTimeConfig.profile_id == profile_id)
-    )
-    config = config_result.scalar_one_or_none()
+    profile, config, title = row.tuple()
 
-    # Fetch title to check educational flag
-    title_result = await db.execute(select(Title).where(Title.id == title_id))
-    title = title_result.scalar_one_or_none()
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
+
+    # T011: Use ConfigCache — if config was NULL from joined query (new profile),
+    # check cache before hitting DB with ensure_default_config
+    from app.services.metrics_service import config_cache, perf_metrics
+
+    if config is None and profile.is_kids:
+        cached = config_cache.get_cached(profile_id)
+        if cached is not None:
+            config = cached
+            perf_metrics.config_cache_hits += 1
+        else:
+            config = await ensure_default_config(db, profile_id)
+            db_op_count += 1
+            config_cache.put(profile_id, config)
+            perf_metrics.config_cache_misses += 1
+    elif config is not None:
+        # Got config from joined query — populate cache for other callers
+        config_cache.put(profile_id, config)
+        perf_metrics.config_cache_hits += 1
 
     is_educational = title.is_educational
 
@@ -237,6 +266,7 @@ async def process_heartbeat(
                 )
             )
         )
+        db_op_count += 1
         for old_session in active_result.scalars().all():
             old_session.ended_at = now
 
@@ -256,6 +286,7 @@ async def process_heartbeat(
         sess_result = await db.execute(
             select(ViewingSession).where(ViewingSession.id == session_id)
         )
+        db_op_count += 1
         session = sess_result.scalar_one_or_none()
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -301,9 +332,9 @@ async def process_heartbeat(
             config.weekend_limit_minutes if _is_weekend(viewing_day) else config.weekday_limit_minutes
         )
 
+        # T008: Upsert with RETURNING to avoid separate re-read
         if should_increment:
             if is_educational and educational_exempt:
-                # Increment educational_seconds only
                 stmt = insert(ViewingTimeBalance).values(
                     profile_id=profile_id,
                     reset_date=viewing_day,
@@ -317,10 +348,15 @@ async def process_heartbeat(
                         "educational_seconds": ViewingTimeBalance.educational_seconds + HEARTBEAT_INTERVAL_SECONDS,
                         "updated_at": now,
                     },
+                ).returning(
+                    ViewingTimeBalance.used_seconds,
+                    ViewingTimeBalance.educational_seconds,
+                    ViewingTimeBalance.is_unlimited_override,
                 )
-                await db.execute(stmt)
+                result = await db.execute(stmt)
+                row = result.one()
+                used_seconds, educational_secs, is_unlimited = row.tuple()
             else:
-                # Increment used_seconds (counts against limit)
                 stmt = insert(ViewingTimeBalance).values(
                     profile_id=profile_id,
                     reset_date=viewing_day,
@@ -334,22 +370,33 @@ async def process_heartbeat(
                         "used_seconds": ViewingTimeBalance.used_seconds + HEARTBEAT_INTERVAL_SECONDS,
                         "updated_at": now,
                     },
+                ).returning(
+                    ViewingTimeBalance.used_seconds,
+                    ViewingTimeBalance.educational_seconds,
+                    ViewingTimeBalance.is_unlimited_override,
                 )
-                await db.execute(stmt)
-
-        # Re-read balance for response
-        bal_result = await db.execute(
-            select(ViewingTimeBalance).where(
-                and_(
-                    ViewingTimeBalance.profile_id == profile_id,
-                    ViewingTimeBalance.reset_date == viewing_day,
+                result = await db.execute(stmt)
+                row = result.one()
+                used_seconds, educational_secs, is_unlimited = row.tuple()
+            db_op_count += 1
+        else:
+            # No increment — still need current balance for enforcement
+            bal_result = await db.execute(
+                select(
+                    ViewingTimeBalance.used_seconds,
+                    ViewingTimeBalance.educational_seconds,
+                    ViewingTimeBalance.is_unlimited_override,
+                ).where(
+                    and_(
+                        ViewingTimeBalance.profile_id == profile_id,
+                        ViewingTimeBalance.reset_date == viewing_day,
+                    )
                 )
             )
-        )
-        balance = bal_result.scalar_one_or_none()
-        used_seconds = balance.used_seconds if balance else 0
-        educational_secs = balance.educational_seconds if balance else 0
-        is_unlimited = balance.is_unlimited_override if balance else False
+            bal_row = bal_result.one_or_none()
+            if bal_row:
+                used_seconds, educational_secs, is_unlimited = bal_row.tuple()
+            db_op_count += 1
 
     await db.commit()
 
@@ -371,6 +418,18 @@ async def process_heartbeat(
     remaining_minutes: float | None = None
     if has_limits and limit_minutes is not None and not is_unlimited:
         remaining_minutes = max(0.0, round((limit_minutes * 60 - used_seconds) / 60.0, 2))
+
+    # T010/T022: Record heartbeat metrics and log
+    hb_duration_ms = (time_mod.monotonic() - hb_start) * 1000
+    perf_metrics.record_heartbeat(db_ops=db_op_count, duration_ms=hb_duration_ms)
+    logger.info(
+        "heartbeat_processed",
+        extra={
+            "profile_id": str(profile_id),
+            "db_ops": db_op_count,
+            "duration_ms": round(hb_duration_ms, 2),
+        },
+    )
 
     return HeartbeatResponse(
         session_id=session.id,
@@ -432,9 +491,10 @@ async def end_session(
 async def check_playback_eligible(
     db: AsyncSession,
     profile_id: uuid.UUID,
+    profile: Profile | None = None,
 ) -> PlaybackEligibilityResponse:
     """Pre-flight check: can this profile start playback right now?"""
-    balance = await get_balance(db, profile_id)
+    balance = await get_balance(db, profile_id, profile=profile)
 
     if not balance.is_child_profile or not balance.has_limits:
         return PlaybackEligibilityResponse(eligible=True)
@@ -561,14 +621,16 @@ async def get_viewing_history(
 
     M-05: Results capped at MAX_HISTORY_SESSIONS to prevent unbounded queries.
     """
+    # T014: Range comparisons instead of func.date() for index usage
+    # T017: joinedload + load_only instead of selectinload for lightweight Title loading
     result = await db.execute(
         select(ViewingSession)
-        .options(selectinload(ViewingSession.title))
+        .options(joinedload(ViewingSession.title).load_only(Title.id, Title.title))
         .where(
             and_(
                 ViewingSession.profile_id == profile_id,
-                func.date(ViewingSession.started_at) >= from_date,
-                func.date(ViewingSession.started_at) <= to_date,
+                ViewingSession.started_at >= datetime.combine(from_date, dt_time.min, tzinfo=UTC),
+                ViewingSession.started_at < datetime.combine(to_date + timedelta(days=1), dt_time.min, tzinfo=UTC),
             )
         )
         .order_by(ViewingSession.started_at.desc())
@@ -641,22 +703,47 @@ async def get_weekly_report(
     )
     child_profiles = result.scalars().all()
 
-    profiles_stats: list[ProfileWeeklyStats] = []
+    profile_ids = [p.id for p in child_profiles]
+    profiles_by_id = {p.id: p for p in child_profiles}
 
-    for profile in child_profiles:
-        # Fetch sessions for the week
+    # Batch fetch all sessions for all child profiles in one query (T015/T016/T018)
+    range_start = datetime.combine(week_start, dt_time.min, tzinfo=UTC)
+    range_end = datetime.combine(week_end + timedelta(days=1), dt_time.min, tzinfo=UTC)
+
+    all_sessions: list[ViewingSession] = []
+    if profile_ids:
         sessions_result = await db.execute(
             select(ViewingSession)
-            .options(selectinload(ViewingSession.title))
+            .options(joinedload(ViewingSession.title).load_only(Title.id, Title.title))
             .where(
                 and_(
-                    ViewingSession.profile_id == profile.id,
-                    func.date(ViewingSession.started_at) >= week_start,
-                    func.date(ViewingSession.started_at) <= week_end,
+                    ViewingSession.profile_id.in_(profile_ids),
+                    ViewingSession.started_at >= range_start,
+                    ViewingSession.started_at < range_end,
                 )
             )
         )
-        sessions = sessions_result.scalars().all()
+        all_sessions = sessions_result.unique().scalars().all()
+
+    # Batch fetch configs for all child profiles in one query
+    configs_by_profile: dict[uuid.UUID, ViewingTimeConfig] = {}
+    if profile_ids:
+        configs_result = await db.execute(
+            select(ViewingTimeConfig).where(ViewingTimeConfig.profile_id.in_(profile_ids))
+        )
+        for cfg in configs_result.scalars().all():
+            configs_by_profile[cfg.profile_id] = cfg
+
+    # Group sessions by profile_id
+    sessions_by_profile: dict[uuid.UUID, list[ViewingSession]] = defaultdict(list)
+    for s in all_sessions:
+        sessions_by_profile[s.profile_id].append(s)
+
+    profiles_stats: list[ProfileWeeklyStats] = []
+
+    for pid in profile_ids:
+        profile = profiles_by_id[pid]
+        sessions = sessions_by_profile.get(pid, [])
 
         # Daily totals
         daily_map: dict[str, float] = {}
@@ -673,7 +760,6 @@ async def get_weekly_report(
             if s.is_educational:
                 educational_minutes += duration_min
 
-            # Accumulate per-title totals
             t_name = s.title.title if s.title else "Unknown"
             existing = title_totals.get(s.title_id, (t_name, 0.0))
             title_totals[s.title_id] = (t_name, existing[1] + duration_min)
@@ -701,8 +787,11 @@ async def get_weekly_report(
             for tid, t_data in sorted_titles
         ]
 
-        # Compute limit usage percent
-        config = await ensure_default_config(db, profile.id)
+        # Compute limit usage percent — use batch-fetched config or create default
+        config = configs_by_profile.get(pid)
+        if config is None:
+            config = await ensure_default_config(db, pid)
+
         total_limit_minutes = 0
         for i in range(7):
             d = week_start + timedelta(days=i)

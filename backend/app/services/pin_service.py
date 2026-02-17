@@ -18,14 +18,24 @@ LOCKOUT_DURATION_MINUTES = 30
 PIN_TOKEN_EXPIRY_MINUTES = 5
 
 
-def _hash_pin(pin: str) -> str:
-    """Hash a 4-digit PIN using bcrypt."""
+def _hash_pin_sync(pin: str) -> str:
+    """Hash a 4-digit PIN using bcrypt (CPU-bound, synchronous)."""
     return bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
 
 
-def _verify_pin_hash(pin: str, hashed: str) -> bool:
-    """Check a plain PIN against its bcrypt hash."""
+def _verify_pin_hash_sync(pin: str, hashed: str) -> bool:
+    """Check a plain PIN against its bcrypt hash (CPU-bound, synchronous)."""
     return bcrypt.checkpw(pin.encode(), hashed.encode())
+
+
+async def _hash_pin(pin: str) -> str:
+    """Hash a PIN off the event loop via thread pool."""
+    return await asyncio.to_thread(_hash_pin_sync, pin)
+
+
+async def _verify_pin_hash(pin: str, hashed: str) -> bool:
+    """Verify a PIN hash off the event loop via thread pool."""
+    return await asyncio.to_thread(_verify_pin_hash_sync, pin, hashed)
 
 
 async def create_pin(
@@ -45,10 +55,10 @@ async def create_pin(
                 status_code=400,
                 detail="Current PIN required to change existing PIN",
             )
-        if not _verify_pin_hash(current_pin, user.pin_hash):
+        if not await _verify_pin_hash(current_pin, user.pin_hash):
             raise HTTPException(status_code=400, detail="Current PIN is incorrect")
 
-    user.pin_hash = _hash_pin(new_pin)
+    user.pin_hash = await _hash_pin(new_pin)
     user.pin_failed_attempts = 0
     user.pin_lockout_until = None
     await db.commit()
@@ -76,7 +86,7 @@ async def verify_pin(db: AsyncSession, user: User, pin: str) -> bool:
 
     # M-04: Normalize response time so success and failure are indistinguishable
     start = asyncio.get_event_loop().time()
-    matched = _verify_pin_hash(pin, user.pin_hash)
+    matched = await _verify_pin_hash(pin, user.pin_hash)
 
     if matched:
         user.pin_failed_attempts = 0
@@ -110,7 +120,7 @@ async def reset_pin(
     if not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect account password")
 
-    user.pin_hash = _hash_pin(new_pin)
+    user.pin_hash = await _hash_pin(new_pin)
     user.pin_failed_attempts = 0
     user.pin_lockout_until = None
     await db.commit()

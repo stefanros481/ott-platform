@@ -167,6 +167,11 @@ async def update_viewing_time_config(
     config.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(config)
+
+    # T012: Invalidate config cache so next heartbeat picks up new values
+    from app.services.metrics_service import config_cache
+    config_cache.invalidate(profile_id)
+
     return ViewingTimeConfigResponse.model_validate(config)
 
 

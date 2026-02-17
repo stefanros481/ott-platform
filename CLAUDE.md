@@ -1355,6 +1355,8 @@ After all agents complete, review the outputs against these criteria:
 - PostgreSQL 16 + pgvector 0.7+ (existing — no schema changes) (005-backend-hardening)
 - Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), Pydantic Settings, python-jose (JWT), bcrypt (PIN hashing) (006-viewing-time-limits)
 - PostgreSQL 16 + pgvector 0.7+ (5 new tables, 1 migration) (006-viewing-time-limits)
+- Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), bcrypt, python-jose (JWT), Pydantic Settings (009-backend-performance)
+- PostgreSQL 16 + pgvector 0.7+ (asyncpg driver) (009-backend-performance)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

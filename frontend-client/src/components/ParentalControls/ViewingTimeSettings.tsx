@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   getViewingTimeConfig,
   updateViewingTimeConfig,
+  verifyPin,
   type ViewingTimeConfig,
   type ViewingTimeConfigUpdate,
 } from '../../api/parentalControls'
@@ -10,6 +11,9 @@ import type { Profile } from '../../api/auth'
 interface ViewingTimeSettingsProps {
   profiles: Profile[]
 }
+
+// Sensitive fields that require PIN verification to change (matches backend SENSITIVE_FIELDS)
+const SENSITIVE_FIELDS = new Set(['reset_hour', 'educational_exempt'])
 
 // Generate dropdown options: 15min to 8h in 15-min steps, plus "Unlimited"
 function buildLimitOptions(): { label: string; value: number | null }[] {
@@ -38,6 +42,29 @@ const RESET_HOURS = Array.from({ length: 24 }, (_, i) => ({
   value: i,
 }))
 
+/** Build an update payload containing only fields that actually changed. */
+function buildDiff(
+  config: ViewingTimeConfig | null,
+  weekdayLimit: number | null,
+  weekendLimit: number | null,
+  resetHour: number,
+  educationalExempt: boolean,
+): ViewingTimeConfigUpdate {
+  const update: ViewingTimeConfigUpdate = {}
+  if (weekdayLimit !== config?.weekday_limit_minutes) update.weekday_limit_minutes = weekdayLimit
+  if (weekendLimit !== config?.weekend_limit_minutes) update.weekend_limit_minutes = weekendLimit
+  if (resetHour !== config?.reset_hour) update.reset_hour = resetHour
+  if (educationalExempt !== config?.educational_exempt) update.educational_exempt = educationalExempt
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (tz !== config?.timezone) update.timezone = tz
+  return update
+}
+
+/** Check whether an update payload touches any sensitive field. */
+function touchesSensitiveField(update: ViewingTimeConfigUpdate): boolean {
+  return Object.keys(update).some((k) => SENSITIVE_FIELDS.has(k))
+}
+
 interface ProfileEditorProps {
   profile: Profile
 }
@@ -54,6 +81,12 @@ function ProfileEditor({ profile }: ProfileEditorProps) {
   const [weekendLimit, setWeekendLimit] = useState<number | null>(null)
   const [resetHour, setResetHour] = useState(6)
   const [educationalExempt, setEducationalExempt] = useState(false)
+
+  // PIN prompt state
+  const [showPinPrompt, setShowPinPrompt] = useState(false)
+  const [pin, setPin] = useState(['', '', '', ''])
+  const [pinError, setPinError] = useState<string | null>(null)
+  const pinRefs = useRef<(HTMLInputElement | null)[]>([])
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
@@ -79,18 +112,21 @@ function ProfileEditor({ profile }: ProfileEditorProps) {
     loadConfig()
   }, [loadConfig])
 
-  const handleSave = async () => {
+  // Focus first PIN input when prompt opens
+  useEffect(() => {
+    if (showPinPrompt) {
+      setTimeout(() => pinRefs.current[0]?.focus(), 100)
+    }
+  }, [showPinPrompt])
+
+  /** Save with an optional pin_token (for sensitive field changes). */
+  const doSave = async (pinToken?: string) => {
     setSaving(true)
     setError(null)
     setSuccess(false)
     try {
-      const update: ViewingTimeConfigUpdate = {
-        weekday_limit_minutes: weekdayLimit,
-        weekend_limit_minutes: weekendLimit,
-        reset_hour: resetHour,
-        educational_exempt: educationalExempt,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      }
+      const update = buildDiff(config, weekdayLimit, weekendLimit, resetHour, educationalExempt)
+      if (pinToken) update.pin_token = pinToken
       const updated = await updateViewingTimeConfig(profile.id, update)
       setConfig(updated)
       setSuccess(true)
@@ -101,6 +137,74 @@ function ProfileEditor({ profile }: ProfileEditorProps) {
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSave = () => {
+    const update = buildDiff(config, weekdayLimit, weekendLimit, resetHour, educationalExempt)
+    if (touchesSensitiveField(update)) {
+      // Need PIN verification first
+      setShowPinPrompt(true)
+      setPin(['', '', '', ''])
+      setPinError(null)
+    } else {
+      doSave()
+    }
+  }
+
+  const handlePinChange = useCallback(
+    (index: number, value: string) => {
+      if (!/^\d*$/.test(value)) return
+      const digit = value.slice(-1)
+      const newPin = [...pin]
+      newPin[index] = digit
+      setPin(newPin)
+      setPinError(null)
+
+      if (digit && index < 3) {
+        pinRefs.current[index + 1]?.focus()
+      }
+
+      // Auto-submit when all 4 digits entered
+      if (digit && index === 3 && newPin.every((d) => d !== '')) {
+        handlePinSubmit(newPin.join(''))
+      }
+    },
+    [pin],
+  )
+
+  const handlePinKeyDown = useCallback(
+    (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Backspace' && !pin[index] && index > 0) {
+        pinRefs.current[index - 1]?.focus()
+      }
+    },
+    [pin],
+  )
+
+  const handlePinSubmit = async (pinCode: string) => {
+    setPinError(null)
+    try {
+      const result = await verifyPin(pinCode)
+      if (result.verified && result.pin_token) {
+        setShowPinPrompt(false)
+        doSave(result.pin_token)
+      } else {
+        setPinError('Incorrect PIN')
+        setPin(['', '', '', ''])
+        setTimeout(() => pinRefs.current[0]?.focus(), 100)
+      }
+    } catch (err: unknown) {
+      const error = err as { message?: string }
+      setPinError(error.message || 'Incorrect PIN')
+      setPin(['', '', '', ''])
+      setTimeout(() => pinRefs.current[0]?.focus(), 100)
+    }
+  }
+
+  const cancelPinPrompt = () => {
+    setShowPinPrompt(false)
+    setPin(['', '', '', ''])
+    setPinError(null)
   }
 
   // Adult profiles (not kids) are unlimited and cannot be changed
@@ -139,7 +243,7 @@ function ProfileEditor({ profile }: ProfileEditorProps) {
     browserTimezone !== config.timezone
 
   return (
-    <div className="bg-surface-overlay rounded-lg p-4 border border-white/5">
+    <div className="bg-surface-overlay rounded-lg p-4 border border-white/5 relative">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-8 h-8 rounded-full bg-amber-600 flex items-center justify-center text-xs font-bold text-white uppercase">
           {profile.name.charAt(0)}
@@ -238,6 +342,45 @@ function ProfileEditor({ profile }: ProfileEditorProps) {
         {success && <span className="text-sm text-emerald-400">Saved</span>}
         {error && <span className="text-sm text-red-400">{error}</span>}
       </div>
+
+      {/* PIN prompt overlay */}
+      {showPinPrompt && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded-lg">
+          <div className="bg-surface-raised rounded-xl p-6 border border-white/10 shadow-2xl max-w-xs w-full mx-4">
+            <h3 className="text-lg font-semibold text-white mb-1">Parent PIN</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              PIN required to change protected settings
+            </p>
+
+            <div className="flex justify-center gap-3 mb-4">
+              {pin.map((digit, i) => (
+                <input
+                  key={i}
+                  ref={(el) => { pinRefs.current[i] = el }}
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={digit}
+                  onChange={(e) => handlePinChange(i, e.target.value)}
+                  onKeyDown={(e) => handlePinKeyDown(i, e)}
+                  className="w-12 h-14 text-center text-xl font-bold text-white bg-surface-overlay border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
+                />
+              ))}
+            </div>
+
+            {pinError && (
+              <p className="text-sm text-red-400 text-center mb-3">{pinError}</p>
+            )}
+
+            <button
+              onClick={cancelPinPrompt}
+              className="w-full text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

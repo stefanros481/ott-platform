@@ -1,0 +1,125 @@
+# Performance Metrics API Contract
+# New endpoint added by 009-backend-performance
+# All existing endpoints remain unchanged (FR-013)
+
+openapi: "3.1.0"
+info:
+  title: Performance Metrics API
+  version: "1.0.0"
+  description: >
+    New admin-only endpoint exposing backend performance metrics.
+    No existing endpoints are modified by this feature.
+
+paths:
+  /api/v1/admin/metrics:
+    get:
+      operationId: getPerformanceMetrics
+      summary: Get backend performance metrics
+      description: >
+        Returns current performance counters for heartbeat processing,
+        config caching, and system health. Counters reset on application restart.
+        Requires admin authentication.
+      tags:
+        - Admin
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Performance metrics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerformanceMetricsResponse"
+              example:
+                uptime_seconds: 3600.5
+                heartbeat:
+                  total_processed: 12500
+                  avg_db_ops_per_heartbeat: 2.8
+                  avg_duration_ms: 45.2
+                  max_duration_ms: 187.3
+                  p95_duration_ms: 120.0
+                config_cache:
+                  hit_rate: 0.94
+                  total_hits: 11750
+                  total_misses: 750
+                  total_invalidations: 12
+                  current_size: 45
+                  max_size: 10000
+        "401":
+          description: Not authenticated
+        "403":
+          description: Not an admin user
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    PerformanceMetricsResponse:
+      type: object
+      required:
+        - uptime_seconds
+        - heartbeat
+        - config_cache
+      properties:
+        uptime_seconds:
+          type: number
+          format: float
+          description: Seconds since application startup
+        heartbeat:
+          type: object
+          required:
+            - total_processed
+            - avg_db_ops_per_heartbeat
+            - avg_duration_ms
+            - max_duration_ms
+          properties:
+            total_processed:
+              type: integer
+              description: Total heartbeats processed since startup
+            avg_db_ops_per_heartbeat:
+              type: number
+              format: float
+              description: Average database operations per heartbeat call
+            avg_duration_ms:
+              type: number
+              format: float
+              description: Average heartbeat processing time in milliseconds
+            max_duration_ms:
+              type: number
+              format: float
+              description: Maximum heartbeat processing time observed
+        config_cache:
+          type: object
+          required:
+            - hit_rate
+            - total_hits
+            - total_misses
+            - total_invalidations
+            - current_size
+            - max_size
+          properties:
+            hit_rate:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+              description: Cache hit rate (0.0 to 1.0)
+            total_hits:
+              type: integer
+              description: Total cache hits since startup
+            total_misses:
+              type: integer
+              description: Total cache misses since startup
+            total_invalidations:
+              type: integer
+              description: Total explicit cache invalidations
+            current_size:
+              type: integer
+              description: Current number of cached entries
+            max_size:
+              type: integer
+              description: Maximum cache capacity

@@ -29,6 +29,7 @@ export interface ViewingTimeConfigUpdate {
   reset_hour?: number
   educational_exempt?: boolean
   timezone?: string
+  pin_token?: string
 }
 
 export interface GrantExtraTimeResponse {

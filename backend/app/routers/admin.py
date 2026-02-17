@@ -15,6 +15,7 @@ from app.models.epg import Channel, ScheduleEntry
 from app.models.user import Profile, User
 from app.schemas.admin import (
     EmbeddingGenerationResponse,
+    PerformanceMetricsResponse,
     PlatformStatsResponse,
     TitleAdminResponse,
     TitleCreateRequest,
@@ -494,3 +495,27 @@ async def generate_embeddings(
 
     count = await generate_all_embeddings(db, regenerate=regenerate)
     return EmbeddingGenerationResponse(new_embeddings_created=count)
+
+
+# ---------------------------------------------------------------------------
+# Performance Metrics (009-backend-performance)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/metrics", response_model=PerformanceMetricsResponse)
+async def get_performance_metrics(_user: AdminUser):
+    """Return in-process performance metrics (heartbeat stats, config cache)."""
+    import time
+
+    from app.services.metrics_service import config_cache, perf_metrics
+
+    snapshot = perf_metrics.snapshot()
+    return PerformanceMetricsResponse(
+        uptime_seconds=round(time.monotonic(), 2),
+        heartbeat=snapshot["heartbeat"],
+        config_cache={
+            **snapshot["config_cache"],
+            "current_size": config_cache.current_size,
+            "max_size": config_cache.max_size,
+        },
+    )
