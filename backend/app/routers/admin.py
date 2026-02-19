@@ -1,16 +1,18 @@
-"""Admin router -- platform stats, CRUD for titles / channels / schedule, embedding generation."""
+"""Admin router -- platform stats, CRUD for titles / channels / schedule, embedding generation,
+packages, offers, and user subscription management (Feature 012)."""
 
 import uuid
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import and_, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import DB, AdminUser
+from app.dependencies import DB, AdminUser, RedisClient
 from app.services.search_service import escape_like
 from app.models.catalog import Title, TitleGenre
 from app.models.embedding import ContentEmbedding
+from app.models.entitlement import ContentPackage, PackageContent, TitleOffer, UserEntitlement
 from app.models.epg import Channel, ScheduleEntry
 from app.models.user import Profile, User
 from app.schemas.admin import (
@@ -21,6 +23,16 @@ from app.schemas.admin import (
     TitleCreateRequest,
     TitlePaginatedResponse,
     TitleUpdateRequest,
+)
+from app.schemas.entitlement import (
+    OfferCreate,
+    OfferResponse,
+    OfferUpdate,
+    PackageCreate,
+    PackageResponse,
+    PackageUpdate,
+    UserEntitlementResponse,
+    UserSubscriptionUpdate,
 )
 from app.schemas.epg import (
     ChannelCreateRequest,
@@ -519,3 +531,487 @@ async def get_performance_metrics(_user: AdminUser):
             "max_size": config_cache.max_size,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# T016 — Package CRUD (Feature 012)
+# ---------------------------------------------------------------------------
+
+
+async def _package_response(pkg: ContentPackage, db: AsyncSession) -> PackageResponse:
+    """Build a PackageResponse with the denormalized title_count."""
+    count_result = await db.execute(
+        select(func.count()).select_from(PackageContent).where(
+            and_(PackageContent.package_id == pkg.id, PackageContent.content_type == "vod_title")
+        )
+    )
+    title_count = count_result.scalar_one()
+    return PackageResponse(
+        id=pkg.id,
+        name=pkg.name,
+        description=pkg.description,
+        tier=pkg.tier,
+        max_streams=pkg.max_streams,
+        title_count=title_count,
+    )
+
+
+@router.get("/packages", response_model=list[PackageResponse])
+async def list_packages(db: DB, user: AdminUser) -> list[PackageResponse]:
+    """List all subscription packages."""
+    result = await db.execute(select(ContentPackage).order_by(ContentPackage.name))
+    packages = result.scalars().all()
+    return [await _package_response(pkg, db) for pkg in packages]
+
+
+@router.post("/packages", response_model=PackageResponse, status_code=201)
+async def create_package(body: PackageCreate, db: DB, user: AdminUser) -> PackageResponse:
+    """Create a new subscription package."""
+    pkg = ContentPackage(
+        name=body.name,
+        description=body.description,
+        tier=body.tier,
+        max_streams=body.max_streams,
+        price_cents=body.price_cents,
+        currency=body.currency,
+    )
+    db.add(pkg)
+    await db.commit()
+    await db.refresh(pkg)
+    return await _package_response(pkg, db)
+
+
+@router.put("/packages/{package_id}", response_model=PackageResponse)
+async def update_package(
+    package_id: uuid.UUID, body: PackageUpdate, db: DB, user: AdminUser
+) -> PackageResponse:
+    """Update a package's name, description, or tier."""
+    result = await db.execute(select(ContentPackage).where(ContentPackage.id == package_id))
+    pkg = result.scalar_one_or_none()
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(pkg, field, value)
+    await db.commit()
+    await db.refresh(pkg)
+    return await _package_response(pkg, db)
+
+
+@router.delete("/packages/{package_id}", status_code=204)
+async def delete_package(package_id: uuid.UUID, db: DB, user: AdminUser) -> None:
+    """Delete a package. Fails with 409 if active user entitlements exist."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    active_ent = await db.execute(
+        select(UserEntitlement).where(
+            and_(
+                UserEntitlement.package_id == package_id,
+                (UserEntitlement.expires_at.is_(None)) | (UserEntitlement.expires_at > now),
+            )
+        )
+    )
+    if active_ent.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete package with active user entitlements",
+        )
+
+    result = await db.execute(select(ContentPackage).where(ContentPackage.id == package_id))
+    pkg = result.scalar_one_or_none()
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    await db.delete(pkg)
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# T017 — Package Title Assignment (Feature 012)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/packages/{package_id}/titles")
+async def list_package_titles(
+    package_id: uuid.UUID,
+    db: DB,
+    user: AdminUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """List all titles assigned to a package (paginated)."""
+    pkg = (await db.execute(select(ContentPackage).where(ContentPackage.id == package_id))).scalar_one_or_none()
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(PackageContent).where(
+                and_(
+                    PackageContent.package_id == package_id,
+                    PackageContent.content_type == "vod_title",
+                )
+            )
+        )
+    ).scalar() or 0
+
+    offset = (page - 1) * page_size
+    rows = (
+        await db.execute(
+            select(Title)
+            .join(PackageContent, and_(
+                PackageContent.content_id == Title.id,
+                PackageContent.package_id == package_id,
+                PackageContent.content_type == "vod_title",
+            ))
+            .order_by(Title.title)
+            .offset(offset)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    items = [
+        TitleAdminResponse(
+            id=t.id,
+            title=t.title,
+            title_type=t.title_type,
+            release_year=t.release_year,
+            age_rating=t.age_rating,
+            poster_url=t.poster_url,
+            is_featured=t.is_featured,
+            has_embedding=False,
+            created_at=t.created_at,
+        )
+        for t in rows
+    ]
+    return TitlePaginatedResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/packages/{package_id}/titles", status_code=201)
+async def assign_title_to_package(
+    package_id: uuid.UUID,
+    body: dict,
+    db: DB,
+    user: AdminUser,
+):
+    """Assign a title to a package."""
+    title_id = body.get("title_id")
+    if not title_id:
+        raise HTTPException(status_code=422, detail="title_id is required")
+    title_id = uuid.UUID(str(title_id))
+
+    # Verify package and title exist
+    pkg = (await db.execute(select(ContentPackage).where(ContentPackage.id == package_id))).scalar_one_or_none()
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    title = (await db.execute(select(Title).where(Title.id == title_id))).scalar_one_or_none()
+    if title is None:
+        raise HTTPException(status_code=404, detail="Title not found")
+
+    # Check for duplicate
+    existing = await db.execute(
+        select(PackageContent).where(
+            and_(
+                PackageContent.package_id == package_id,
+                PackageContent.content_type == "vod_title",
+                PackageContent.content_id == title_id,
+            )
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="Title already assigned to this package")
+
+    db.add(PackageContent(package_id=package_id, content_type="vod_title", content_id=title_id))
+    await db.commit()
+    return {"package_id": str(package_id), "title_id": str(title_id), "content_type": "vod_title"}
+
+
+@router.delete("/packages/{package_id}/titles/{title_id}", status_code=204)
+async def remove_title_from_package(
+    package_id: uuid.UUID,
+    title_id: uuid.UUID,
+    db: DB,
+    user: AdminUser,
+) -> None:
+    """Remove a title from a package."""
+    result = await db.execute(
+        select(PackageContent).where(
+            and_(
+                PackageContent.package_id == package_id,
+                PackageContent.content_type == "vod_title",
+                PackageContent.content_id == title_id,
+            )
+        )
+    )
+    assignment = result.scalar_one_or_none()
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Title assignment not found")
+
+    await db.delete(assignment)
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# T018 — Offer CRUD (Feature 012)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/titles/{title_id}/offers", response_model=list[OfferResponse])
+async def list_title_offers(title_id: uuid.UUID, db: DB, user: AdminUser) -> list[OfferResponse]:
+    """List all offers (including inactive) for a title."""
+    result = await db.execute(
+        select(TitleOffer)
+        .where(TitleOffer.title_id == title_id)
+        .order_by(TitleOffer.created_at)
+    )
+    return result.scalars().all()
+
+
+@router.post("/titles/{title_id}/offers", response_model=OfferResponse, status_code=201)
+async def create_title_offer(
+    title_id: uuid.UUID, body: OfferCreate, db: DB, user: AdminUser
+) -> OfferResponse:
+    """Create an offer for a title. Fails if an active offer of the same type already exists."""
+    # Validate title exists
+    title = (await db.execute(select(Title).where(Title.id == title_id))).scalar_one_or_none()
+    if title is None:
+        raise HTTPException(status_code=404, detail="Title not found")
+
+    # Validate rental_window_hours required for rent
+    if body.offer_type == "rent" and body.rental_window_hours is None:
+        raise HTTPException(
+            status_code=422,
+            detail="rental_window_hours is required when offer_type is 'rent'",
+        )
+
+    # Check for duplicate active offer of same type
+    existing = await db.execute(
+        select(TitleOffer).where(
+            and_(
+                TitleOffer.title_id == title_id,
+                TitleOffer.offer_type == body.offer_type,
+                TitleOffer.is_active.is_(True),
+            )
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"An active {body.offer_type} offer already exists for this title",
+        )
+
+    offer = TitleOffer(
+        title_id=title_id,
+        offer_type=body.offer_type,
+        price_cents=body.price_cents,
+        currency=body.currency,
+        rental_window_hours=body.rental_window_hours,
+    )
+    db.add(offer)
+    await db.commit()
+    await db.refresh(offer)
+    return offer
+
+
+@router.patch("/titles/{title_id}/offers/{offer_id}", response_model=OfferResponse)
+async def update_title_offer(
+    title_id: uuid.UUID,
+    offer_id: uuid.UUID,
+    body: OfferUpdate,
+    db: DB,
+    user: AdminUser,
+) -> OfferResponse:
+    """Update an offer (e.g., change price, deactivate)."""
+    result = await db.execute(
+        select(TitleOffer).where(
+            and_(TitleOffer.id == offer_id, TitleOffer.title_id == title_id)
+        )
+    )
+    offer = result.scalar_one_or_none()
+    if offer is None:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(offer, field, value)
+
+    await db.commit()
+    await db.refresh(offer)
+    return offer
+
+
+# ---------------------------------------------------------------------------
+# T019 — User Subscription Management (Feature 012)
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/users/{user_id}/subscription")
+async def update_user_subscription(
+    user_id: uuid.UUID,
+    body: UserSubscriptionUpdate,
+    db: DB,
+    user: AdminUser,
+    redis: RedisClient,
+):
+    """Update a user's subscription. Creates or replaces SVOD entitlement.
+
+    Set package_id to null to cancel the subscription.
+    Invalidates the entitlement cache for the affected user.
+    """
+    from app.services import entitlement_service
+    from datetime import datetime, timezone
+
+    # Verify target user exists
+    target_user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+
+    # Expire all existing SVOD entitlements for this user
+    existing_svod = await db.execute(
+        select(UserEntitlement).where(
+            and_(
+                UserEntitlement.user_id == user_id,
+                UserEntitlement.source_type == "subscription",
+            )
+        )
+    )
+    for ent in existing_svod.scalars().all():
+        ent.expires_at = now
+    await db.flush()
+
+    subscription_tier = None
+    package_id = body.package_id
+
+    if package_id is not None:
+        # Verify package exists and get tier
+        pkg = (await db.execute(select(ContentPackage).where(ContentPackage.id == package_id))).scalar_one_or_none()
+        if pkg is None:
+            raise HTTPException(status_code=404, detail="Package not found")
+        subscription_tier = pkg.tier
+
+        # Create new subscription entitlement
+        new_ent = UserEntitlement(
+            user_id=user_id,
+            package_id=package_id,
+            source_type="subscription",
+            expires_at=body.expires_at,
+        )
+        db.add(new_ent)
+
+    # Update User.subscription_tier for display
+    target_user.subscription_tier = subscription_tier
+    await db.commit()
+
+    # Invalidate the entitlement cache for this user
+    await entitlement_service.invalidate_entitlement_cache(user_id, redis)
+
+    return {
+        "user_id": str(user_id),
+        "package_id": str(package_id) if package_id else None,
+        "subscription_tier": subscription_tier,
+        "expires_at": body.expires_at.isoformat() if body.expires_at else None,
+    }
+
+
+@router.get("/users/{user_id}/entitlements", response_model=list[UserEntitlementResponse])
+async def list_user_entitlements(
+    user_id: uuid.UUID,
+    db: DB,
+    user: AdminUser,
+    include_expired: bool = Query(False, description="Include expired entitlements"),
+) -> list[UserEntitlementResponse]:
+    """List all entitlements for a user (SVOD subscriptions + TVOD purchases).
+
+    By default only active (non-expired) entitlements are returned.
+    Pass ?include_expired=true to see the full history.
+    """
+    from datetime import datetime, timezone
+
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    query = select(UserEntitlement).where(UserEntitlement.user_id == user_id)
+    if not include_expired:
+        now = datetime.now(timezone.utc)
+        query = query.where(
+            (UserEntitlement.expires_at.is_(None)) | (UserEntitlement.expires_at > now)
+        )
+    query = query.order_by(UserEntitlement.granted_at.desc())
+
+    entitlements = (await db.execute(query)).scalars().all()
+
+    # Bulk-fetch referenced packages and titles for denormalisation
+    pkg_ids = {e.package_id for e in entitlements if e.package_id}
+    title_ids = {e.title_id for e in entitlements if e.title_id}
+
+    packages: dict[uuid.UUID, ContentPackage] = {}
+    if pkg_ids:
+        rows = (await db.execute(select(ContentPackage).where(ContentPackage.id.in_(pkg_ids)))).scalars().all()
+        packages = {p.id: p for p in rows}
+
+    titles: dict[uuid.UUID, Title] = {}
+    if title_ids:
+        rows = (await db.execute(select(Title).where(Title.id.in_(title_ids)))).scalars().all()
+        titles = {t.id: t for t in rows}
+
+    now = datetime.now(timezone.utc)
+    result = []
+    for e in entitlements:
+        pkg = packages.get(e.package_id) if e.package_id else None
+        title = titles.get(e.title_id) if e.title_id else None
+        result.append(UserEntitlementResponse(
+            id=e.id,
+            source_type=e.source_type,
+            package_id=e.package_id,
+            package_name=pkg.name if pkg else None,
+            package_tier=pkg.tier if pkg else None,
+            title_id=e.title_id,
+            title_name=title.title if title else None,
+            granted_at=e.granted_at,
+            expires_at=e.expires_at,
+            is_active=e.expires_at is None or e.expires_at > now,
+        ))
+    return result
+
+
+@router.delete("/users/{user_id}/entitlements/{entitlement_id}", status_code=204)
+async def revoke_user_entitlement(
+    user_id: uuid.UUID,
+    entitlement_id: uuid.UUID,
+    db: DB,
+    user: AdminUser,
+    redis: RedisClient,
+) -> None:
+    """Revoke a specific entitlement immediately by setting expires_at = now.
+
+    Works for both SVOD subscriptions and TVOD purchases.
+    Invalidates the entitlement cache for the affected user.
+    """
+    from datetime import datetime, timezone
+    from app.services import entitlement_service
+
+    ent = (
+        await db.execute(
+            select(UserEntitlement).where(
+                and_(UserEntitlement.id == entitlement_id, UserEntitlement.user_id == user_id)
+            )
+        )
+    ).scalar_one_or_none()
+
+    if ent is None:
+        raise HTTPException(status_code=404, detail="Entitlement not found")
+
+    ent.expires_at = datetime.now(timezone.utc)
+
+    # If this was the active SVOD subscription, clear the user's tier
+    if ent.source_type == "subscription":
+        target_user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if target_user:
+            target_user.subscription_tier = None
+
+    await db.commit()
+    await entitlement_service.invalidate_entitlement_cache(user_id, redis)

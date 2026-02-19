@@ -2,6 +2,7 @@
 
 import uuid
 
+import bcrypt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,14 @@ from app.models.entitlement import ContentPackage, PackageContent, UserEntitleme
 from app.models.epg import Channel
 from app.models.user import Profile, User
 from app.services.auth_service import hash_password
+
+# Default PIN assigned to every seeded user.
+# Users can change it on the Parental Controls page.
+DEFAULT_PIN = "1234"
+
+
+def _hash_default_pin() -> str:
+    return bcrypt.hashpw(DEFAULT_PIN.encode(), bcrypt.gensalt()).decode()
 
 # ---------------------------------------------------------------------------
 # User definitions
@@ -201,6 +210,7 @@ async def seed_users(session: AsyncSession) -> dict[str, int]:
             subscription_tier=u["subscription_tier"],
             is_admin=u["is_admin"],
             is_active=True,
+            pin_hash=_hash_default_pin(),
         ))
         user_count += 1
 

@@ -1,6 +1,7 @@
 """Pydantic schemas for the content catalog endpoints."""
 
 import uuid
+from datetime import datetime
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
@@ -66,6 +67,8 @@ class TitleListItem(BaseModel):
     is_featured: bool = False
     mood_tags: list[str] | None = None
     genres: list[str] = []
+    access_options: list["AccessOption"] = []
+    user_access: "UserAccess | None" = None
 
     model_config = {"from_attributes": True}
 
@@ -94,6 +97,8 @@ class TitleDetail(BaseModel):
     genres: list[str] = []
     cast: list[CastMember] = []
     seasons: list[SeasonResponse] = []
+    access_options: list["AccessOption"] = []
+    user_access: "UserAccess | None" = None
 
     model_config = {"from_attributes": True}
 
@@ -138,3 +143,26 @@ class SemanticSearchResponse(BaseModel):
     total: int
     query: str
     mode: str
+
+
+# ── Entitlement / access schemas (Feature 012) ───────────────────────────────
+
+
+class AccessOption(BaseModel):
+    type: str
+    label: str
+    price_cents: int | None = None
+    currency: str | None = None
+    rental_window_hours: int | None = None
+
+
+class UserAccess(BaseModel):
+    has_access: bool
+    access_type: str | None = None
+    expires_at: datetime | None = None
+    required_tier: str | None = None  # lowest SVOD tier that grants access
+
+
+# Rebuild models that reference AccessOption/UserAccess as forward refs
+TitleListItem.model_rebuild()
+TitleDetail.model_rebuild()

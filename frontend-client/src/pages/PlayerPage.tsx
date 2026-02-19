@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getTitleById } from '../api/catalog'
-import { getBookmarkByContent } from '../api/viewing'
+import { getBookmarkByContent, createStreamSession, heartbeatSession, stopSession, listActiveSessions } from '../api/viewing'
 import { type Channel, type ScheduleEntry, getSchedule } from '../api/epg'
 import { useBookmarkSync } from '../hooks/useBookmarkSync'
 import { useViewingTime, useHeartbeat } from '../hooks/useViewingTime'
@@ -30,6 +30,13 @@ export default function PlayerPage() {
   const [playerIsPlaying, setPlayerIsPlaying] = useState(false)
   const [startPosition, setStartPosition] = useState<number | undefined>(undefined)
   const [resumePromptDismissed, setResumePromptDismissed] = useState(false)
+
+  // Stream session state — tracks the concurrent stream session with the backend
+  const [streamError, setStreamError] = useState<'no_access' | 'stream_limit' | 'session_ended' | null>(null)
+  const [streamSessionReady, setStreamSessionReady] = useState(false)
+  const [isStoppingOtherSessions, setIsStoppingOtherSessions] = useState(false)
+  const streamSessionId = useRef<string | null>(null)
+  const streamHeartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Live TV state — channel from route state, program can update on transition
   const isLive = type === 'live'
@@ -130,7 +137,6 @@ export default function PlayerPage() {
     && existingBookmark.position_seconds > 10
 
   // Only use the actual video duration from the player — title metadata may differ from the stream.
-  // When videoDuration is 0, the doSave guard in useBookmarkSync skips saves until the player reports it.
   const durationSeconds = videoDuration
 
   const { saveNow } = useBookmarkSync({
@@ -157,8 +163,6 @@ export default function PlayerPage() {
   const isLocked = balanceLocked || heartbeatBlocked
 
   // Viewing time heartbeat — sends 30s heartbeats to track kids profile usage.
-  // Uses the parent title ID (not episode ID) so the backend can look up is_educational.
-  // Stops sending when locked so no more time is counted.
   const { enforcement, isEducational } = useHeartbeat(
     profile?.id ?? '',
     title?.id ?? '',
@@ -179,6 +183,123 @@ export default function PlayerPage() {
     setHeartbeatBlocked(false)
     refetchBalance()
   }, [refetchBalance])
+
+  // Stop all other active sessions and retry starting a new one
+  const handleStopOtherSessions = useCallback(async () => {
+    setIsStoppingOtherSessions(true)
+    try {
+      const sessions = await listActiveSessions()
+      await Promise.allSettled(sessions.map(s => stopSession(s.session_id)))
+      // Reset error and retry — the session effect will re-run on next render via state reset
+      setStreamError(null)
+      setStreamSessionReady(false)
+      // Trigger re-run by momentarily clearing session state
+      streamSessionId.current = null
+      if (streamHeartbeatTimer.current) {
+        clearInterval(streamHeartbeatTimer.current)
+        streamHeartbeatTimer.current = null
+      }
+      // Retry session creation directly
+      const session = await createStreamSession(contentId, 'vod_title')
+      streamSessionId.current = session.session_id
+      streamHeartbeatTimer.current = setInterval(async () => {
+        if (streamSessionId.current) {
+          try {
+            await heartbeatSession(streamSessionId.current)
+          } catch (err: any) {
+            if (err?.status === 404) {
+              clearInterval(streamHeartbeatTimer.current!)
+              streamHeartbeatTimer.current = null
+              streamSessionId.current = null
+              setStreamError('session_ended')
+            }
+          }
+        }
+      }, 30_000)
+      setStreamSessionReady(true)
+    } catch (err: any) {
+      if (err?.status === 429) {
+        setStreamError('stream_limit')
+      } else {
+        setStreamSessionReady(true) // fail open
+      }
+    } finally {
+      setIsStoppingOtherSessions(false)
+    }
+  }, [contentId])
+
+  // ── Stream session management ─────────────────────────────────────────────
+  // For VOD titles (movie/episode), create a stream session before playback.
+  // Live TV skips session management — handled differently server-side.
+  useEffect(() => {
+    if (isLive || !contentId || contentId === '') return
+    // Wait until title data is available (or live) before creating session
+    if (!isLive && isLoading) return
+
+    let unmounted = false
+
+    async function startSession() {
+      try {
+        const session = await createStreamSession(contentId, 'vod_title')
+        if (unmounted) {
+          // Component unmounted while the API call was in-flight — close the
+          // orphaned session immediately so it doesn't block the stream limit.
+          stopSession(session.session_id).catch(() => {})
+          return
+        }
+        streamSessionId.current = session.session_id
+
+        // Start 30-second heartbeat to keep the session alive.
+        // 404 means the session was terminated externally (another device took over).
+        streamHeartbeatTimer.current = setInterval(async () => {
+          if (streamSessionId.current) {
+            try {
+              await heartbeatSession(streamSessionId.current)
+            } catch (err: any) {
+              if (err?.status === 404) {
+                clearInterval(streamHeartbeatTimer.current!)
+                streamHeartbeatTimer.current = null
+                streamSessionId.current = null
+                setStreamError('session_ended')
+              }
+              // Other errors: tolerate — transient network failures
+            }
+          }
+        }, 30_000)
+
+        setStreamSessionReady(true)
+      } catch (err: any) {
+        if (unmounted) return
+        if (err?.status === 403) {
+          setStreamError('no_access')
+        } else if (err?.status === 429) {
+          setStreamError('stream_limit')
+        } else {
+          // Unexpected error — still allow playback (fail open for better UX)
+          setStreamSessionReady(true)
+        }
+      }
+    }
+
+    startSession()
+
+    return () => {
+      unmounted = true
+      // Clean up heartbeat timer
+      if (streamHeartbeatTimer.current) {
+        clearInterval(streamHeartbeatTimer.current)
+        streamHeartbeatTimer.current = null
+      }
+      // Stop stream session on unmount (if already established)
+      if (streamSessionId.current) {
+        stopSession(streamSessionId.current).catch(() => {
+          // Fire-and-forget — best effort on unmount
+        })
+        streamSessionId.current = null
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentId, isLive, isLoading])
 
   const handlePositionUpdate = useCallback((positionSeconds: number) => {
     if (!title || !profile) return
@@ -202,7 +323,6 @@ export default function PlayerPage() {
 
   const handleStartOver = useCallback(() => {
     if (isLive && liveProgramRef.current) {
-      // Seek backward from live edge by the elapsed program time
       const elapsed = (Date.now() - new Date(liveProgramRef.current.start_time).getTime()) / 1000
       setStartPosition(-Math.max(0, elapsed))
     } else {
@@ -216,7 +336,7 @@ export default function PlayerPage() {
     if (!isLive || !liveProgram || !liveChannel) return
     const endTime = new Date(liveProgram.end_time).getTime()
     const delay = endTime - Date.now()
-    if (delay <= 0) return // program already ended
+    if (delay <= 0) return
 
     const timer = setTimeout(async () => {
       try {
@@ -230,13 +350,12 @@ export default function PlayerPage() {
       } catch {
         // Silently continue — display title stays as channel name
       }
-    }, delay + 1000) // +1s buffer to ensure the new program has started
+    }, delay + 1000)
 
     return () => clearTimeout(timer)
   }, [isLive, liveProgram, liveChannel])
 
   // Invalidate continue-watching cache on unmount so home page fetches fresh data.
-  // Small delay gives the unmount bookmark save time to reach the server.
   useEffect(() => {
     return () => {
       setTimeout(() => {
@@ -256,7 +375,81 @@ export default function PlayerPage() {
     return () => clearTimeout(timer)
   }, [nextEpisodeCountdown, nextEpisodeId, navigate])
 
-  if (isLoading || bookmarkLoading || balanceLoading) {
+  // ── Stream access error screens ───────────────────────────────────────────
+  if (streamError === 'no_access') {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <div className="text-center max-w-sm px-6">
+          <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+          <p className="text-white text-lg font-semibold mb-2">No access to this title</p>
+          <p className="text-gray-400 text-sm mb-6">Purchase or subscribe to watch this content.</p>
+          <button
+            onClick={() => navigate(-1)}
+            className="px-6 py-2.5 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors"
+          >
+            Go Back
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (streamError === 'stream_limit') {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <div className="text-center max-w-sm px-6">
+          <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0H3" />
+          </svg>
+          <p className="text-white text-lg font-semibold mb-2">Stream limit reached</p>
+          <p className="text-gray-400 text-sm mb-6">
+            You've reached the maximum number of simultaneous streams for your plan.
+          </p>
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={handleStopOtherSessions}
+              disabled={isStoppingOtherSessions}
+              className="px-6 py-2.5 bg-primary-500 text-white rounded-lg hover:bg-primary-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isStoppingOtherSessions ? 'Stopping other streams…' : 'Stop other streams & watch here'}
+            </button>
+            <button
+              onClick={() => navigate(-1)}
+              className="px-6 py-2.5 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors"
+            >
+              Go Back
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (streamError === 'session_ended') {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <div className="text-center max-w-sm px-6">
+          <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0H3" />
+          </svg>
+          <p className="text-white text-lg font-semibold mb-2">Stream stopped</p>
+          <p className="text-gray-400 text-sm mb-6">Your stream was stopped because playback started on another device.</p>
+          <button
+            onClick={() => navigate(-1)}
+            className="px-6 py-2.5 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors"
+          >
+            Go Back
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Show loading while title fetches OR while stream session is being created for VOD
+  const waitingForSession = !isLive && !streamSessionReady && !streamError
+  if (isLoading || bookmarkLoading || balanceLoading || waitingForSession) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -388,7 +581,6 @@ export default function PlayerPage() {
           </div>
         </div>
       )}
-
     </div>
   )
 }

@@ -17,6 +17,7 @@ dependencies = [
     "redis>=5.2",
     "sentence-transformers>=3.3",
     "httpx>=0.28",
+    "slowapi>=0.1.9",
 ]
 
 [tool.hatch.build.targets.wheel]

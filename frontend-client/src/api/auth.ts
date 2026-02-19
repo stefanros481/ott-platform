@@ -55,3 +55,10 @@ export function createProfile(payload: CreateProfilePayload): Promise<Profile> {
     body: JSON.stringify(payload),
   })
 }
+
+export function upgradeSubscription(tier: string): Promise<UserProfile> {
+  return apiFetch<UserProfile>('/auth/subscription', {
+    method: 'PATCH',
+    body: JSON.stringify({ tier }),
+  })
+}

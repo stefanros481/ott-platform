@@ -1,7 +1,8 @@
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Query, status
+import redis.asyncio
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,3 +128,14 @@ async def require_account_owner(
 
 
 AccountOwner = Annotated[User, Depends(require_account_owner)]
+
+
+# ── Redis dependency (Feature 012) ───────────────────────────────────────────
+
+
+async def get_redis(request: Request) -> redis.asyncio.Redis:
+    """Return the Redis client stored on app.state by the lifespan handler."""
+    return request.app.state.redis
+
+
+RedisClient = Annotated[redis.asyncio.Redis, Depends(get_redis)]

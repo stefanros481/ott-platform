@@ -246,3 +246,151 @@ export function getGenres() {
 export function getUsers() {
   return apiFetch<AdminUser[]>('/admin/users')
 }
+
+// ---- Packages ----
+
+export interface PackageResponse {
+  id: string
+  name: string
+  description: string | null
+  tier: string
+  max_streams: number
+  price_cents: number
+  currency: string
+  title_count: number
+}
+
+export interface PackageCreate {
+  name: string
+  description?: string
+  tier?: string
+  max_streams?: number
+  price_cents?: number
+  currency?: string
+}
+
+export function getPackages(): Promise<PackageResponse[]> {
+  return apiFetch<PackageResponse[]>('/admin/packages')
+}
+
+export function createPackage(data: PackageCreate): Promise<PackageResponse> {
+  return apiFetch<PackageResponse>('/admin/packages', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updatePackage(id: string, data: Partial<PackageCreate>): Promise<PackageResponse> {
+  return apiFetch<PackageResponse>(`/admin/packages/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deletePackage(id: string): Promise<void> {
+  return apiFetch<void>(`/admin/packages/${id}`, { method: 'DELETE' })
+}
+
+export function getPackageTitles(packageId: string, page = 1, pageSize = 50): Promise<TitlePaginatedResponse> {
+  return apiFetch<TitlePaginatedResponse>(
+    `/admin/packages/${packageId}/titles?page=${page}&page_size=${pageSize}`
+  )
+}
+
+export function assignTitleToPackage(packageId: string, titleId: string): Promise<void> {
+  return apiFetch<void>(`/admin/packages/${packageId}/titles`, {
+    method: 'POST',
+    body: JSON.stringify({ title_id: titleId }),
+  })
+}
+
+export function removeTitleFromPackage(packageId: string, titleId: string): Promise<void> {
+  return apiFetch<void>(`/admin/packages/${packageId}/titles/${titleId}`, {
+    method: 'DELETE',
+  })
+}
+
+// ---- Offers ----
+
+export interface OfferResponse {
+  id: string
+  offer_type: 'rent' | 'buy'
+  price_cents: number
+  currency: string
+  rental_window_hours: number | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface OfferCreate {
+  offer_type: 'rent' | 'buy'
+  price_cents: number
+  currency: string
+  rental_window_hours?: number | null
+}
+
+export interface OfferUpdate {
+  price_cents?: number
+  currency?: string
+  rental_window_hours?: number | null
+  is_active?: boolean
+}
+
+export function getTitleOffers(titleId: string): Promise<OfferResponse[]> {
+  return apiFetch<OfferResponse[]>(`/admin/titles/${titleId}/offers`)
+}
+
+export function createOffer(titleId: string, data: OfferCreate): Promise<OfferResponse> {
+  return apiFetch<OfferResponse>(`/admin/titles/${titleId}/offers`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateOffer(titleId: string, offerId: string, data: Partial<OfferUpdate>): Promise<OfferResponse> {
+  return apiFetch<OfferResponse>(`/admin/titles/${titleId}/offers/${offerId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+// ---- Subscriptions & Entitlements ----
+
+export interface UserEntitlement {
+  id: string
+  source_type: string          // "subscription" | "tvod_rent" | "tvod_buy"
+  package_id: string | null
+  package_name: string | null
+  package_tier: string | null
+  title_id: string | null
+  title_name: string | null
+  granted_at: string
+  expires_at: string | null
+  is_active: boolean
+}
+
+export function updateUserSubscription(
+  userId: string,
+  packageId: string | null,
+  expiresAt?: string,
+): Promise<void> {
+  return apiFetch<void>(`/admin/users/${userId}/subscription`, {
+    method: 'PATCH',
+    body: JSON.stringify({ package_id: packageId, expires_at: expiresAt ?? null }),
+  })
+}
+
+export function getUserEntitlements(
+  userId: string,
+  includeExpired = false,
+): Promise<UserEntitlement[]> {
+  return apiFetch<UserEntitlement[]>(
+    `/admin/users/${userId}/entitlements?include_expired=${includeExpired}`,
+  )
+}
+
+export function revokeUserEntitlement(userId: string, entitlementId: string): Promise<void> {
+  return apiFetch<void>(`/admin/users/${userId}/entitlements/${entitlementId}`, {
+    method: 'DELETE',
+  })
+}

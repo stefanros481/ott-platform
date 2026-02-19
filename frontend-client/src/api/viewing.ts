@@ -142,3 +142,44 @@ export function removeFromWatchlist(profileId: string, titleId: string): Promise
     method: 'DELETE',
   })
 }
+
+// ── Stream sessions (concurrent stream enforcement) ──────────────────────────
+
+export interface StreamSession {
+  session_id: string
+  started_at: string
+}
+
+export interface ActiveSession {
+  session_id: string
+  title_id: string | null
+  title_name: string | null
+  started_at: string
+  last_heartbeat_at: string
+}
+
+export function listActiveSessions(): Promise<ActiveSession[]> {
+  return apiFetch<ActiveSession[]>('/viewing/sessions')
+}
+
+export function createStreamSession(
+  titleId: string,
+  contentType: string,
+): Promise<StreamSession> {
+  return apiFetch<StreamSession>('/viewing/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ title_id: titleId, content_type: contentType }),
+  })
+}
+
+export function heartbeatSession(sessionId: string): Promise<void> {
+  return apiFetch<void>(`/viewing/sessions/${sessionId}/heartbeat`, {
+    method: 'PUT',
+  })
+}
+
+export function stopSession(sessionId: string): Promise<void> {
+  return apiFetch<void>(`/viewing/sessions/${sessionId}`, {
+    method: 'DELETE',
+  })
+}
