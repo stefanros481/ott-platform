@@ -1359,6 +1359,8 @@ After all agents complete, review the outputs against these criteria:
 - PostgreSQL 16 + pgvector 0.7+ (asyncpg driver) (009-backend-performance)
 - Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ (async), React 18, TanStack Query, Shaka Player 4+ (011-recs-watchlist-livetv)
 - PostgreSQL 16 + pgvector 0.7+ (existing schema, no new tables) (011-recs-watchlist-livetv)
+- Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-admin) + FastAPI 0.115+, SQLAlchemy 2.0+ async, Alembic 1.14+, slowapi (new), redis.asyncio 5.2+ (existing) (012-entitlements-tvod)
+- PostgreSQL 16 (primary), Redis 7 (rate limiting state + entitlement cache) (012-entitlements-tvod)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

@@ -90,12 +90,22 @@ async def main(include_embeddings: bool = False) -> None:
     print(f"  Done in {elapsed:.1f}s.")
 
     # 6. Seed bookmarks (depends on users + catalog)
-    print("\n[6/6] Seeding bookmarks (continue watching demo data)...")
+    print("\n[6/7] Seeding bookmarks (continue watching demo data)...")
     start = time.monotonic()
     from app.seed.seed_bookmarks import seed_bookmarks
 
     async with async_session_factory() as session:
         bookmark_counts = await seed_bookmarks(session)
+    elapsed = time.monotonic() - start
+    print(f"  Done in {elapsed:.1f}s.")
+
+    # 7. Seed entitlements (Feature 012)
+    print("\n[7/7] Seeding entitlements (packages, title offers, test users)...")
+    start = time.monotonic()
+    from app.seed.seed_entitlements import seed_entitlements
+
+    async with async_session_factory() as session:
+        entitlement_counts = await seed_entitlements(session)
     elapsed = time.monotonic() - start
     print(f"  Done in {elapsed:.1f}s.")
 
@@ -112,7 +122,7 @@ async def main(include_embeddings: bool = False) -> None:
         print(f"  Done in {elapsed:.1f}s.")
 
     # Summary
-    all_counts = {**catalog_counts, **epg_counts, **user_counts, **bookmark_counts, **embed_counts}
+    all_counts = {**catalog_counts, **epg_counts, **user_counts, **bookmark_counts, **entitlement_counts, **embed_counts}
     print("\n" + "=" * 60)
     print("  SEED SUMMARY")
     print("=" * 60)

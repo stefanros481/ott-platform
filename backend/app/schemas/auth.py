@@ -49,6 +49,10 @@ class ProfileCreateRequest(BaseModel):
     is_kids: bool = False
 
 
+class SubscriptionUpgradeRequest(BaseModel):
+    tier: str = Field(..., pattern=r"^(basic|standard|premium)$")
+
+
 # ── Response schemas ─────────────────────────────────────────────────────────
 
 

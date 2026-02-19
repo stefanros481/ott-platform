@@ -1,10 +1,16 @@
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+import redis.asyncio as aioredis
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import settings
+from app.limiter import limiter
 
 
 @asynccontextmanager
@@ -24,8 +30,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     async with async_session_factory() as session:
         await session.execute(text("SELECT 1"))
 
+    # Initialize Redis client for entitlement caching
+    redis_client = aioredis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=5,
+    )
+    _app.state.redis = redis_client
+
     yield
-    # Shutdown: dispose engine
+
+    # Shutdown: close Redis, dispose engine
+    await redis_client.aclose()
     await engine.dispose()
 
 
@@ -36,19 +52,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # Import and mount routers
-from app.routers import admin, auth, catalog, epg, parental_controls, recommendations, viewing, viewing_time
+from app.routers import admin, auth, catalog, epg, offers, parental_controls, recommendations, viewing, viewing_time
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(catalog.router, prefix="/api/v1/catalog", tags=["Catalog"])
+app.include_router(offers.router, prefix="/api/v1/catalog", tags=["Offers"])
 app.include_router(epg.router, prefix="/api/v1/epg", tags=["EPG"])
 app.include_router(recommendations.router, prefix="/api/v1/recommendations", tags=["Recommendations"])
 app.include_router(viewing.router, prefix="/api/v1/viewing", tags=["Viewing"])

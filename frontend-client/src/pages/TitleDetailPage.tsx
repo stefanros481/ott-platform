@@ -1,19 +1,267 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
-import { getTitleById } from '../api/catalog'
+import { getTitleById, type AccessOption } from '../api/catalog'
 import { getSimilarTitles } from '../api/recommendations'
 import { rateTitle, getRating, addToWatchlist, removeFromWatchlist, getWatchlist } from '../api/viewing'
+import { purchaseTitle } from '../api/entitlements'
+import { verifyPin } from '../api/parentalControls'
+import { upgradeSubscription } from '../api/auth'
 import ContentRail from '../components/ContentRail'
 import TitleCard from '../components/TitleCard'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatPrice(priceCents: number, currency: string): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+  }).format(priceCents / 100)
+}
+
+function formatExpiresAt(isoString: string): string {
+  return new Date(isoString).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// ── Purchase confirmation modal ───────────────────────────────────────────────
+
+interface PurchaseModalProps {
+  titleName: string
+  offer: AccessOption
+  onConfirm: () => void
+  onCancel: () => void
+  isPending: boolean
+}
+
+function PurchaseModal({ titleName, offer, onConfirm, onCancel, isPending }: PurchaseModalProps) {
+  const price = offer.price_cents != null && offer.currency
+    ? formatPrice(offer.price_cents, offer.currency)
+    : null
+
+  const windowLabel = offer.rental_window_hours
+    ? `${offer.rental_window_hours}-hour rental window`
+    : null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-sm rounded-xl border border-white/10 bg-surface-raised p-6 shadow-2xl">
+        <h2 className="mb-1 text-lg font-semibold text-white">
+          {offer.type === 'rent' ? 'Rent' : 'Buy'} "{titleName}"
+        </h2>
+
+        {price && (
+          <p className="mb-1 text-2xl font-bold text-white">{price}</p>
+        )}
+
+        {windowLabel && (
+          <p className="mb-4 text-sm text-gray-400">{windowLabel}</p>
+        )}
+
+        {!windowLabel && (
+          <p className="mb-4 text-sm text-gray-400">Own this title permanently.</p>
+        )}
+
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={onConfirm}
+            disabled={isPending}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-primary-500 disabled:opacity-60"
+          >
+            {isPending ? (
+              <>
+                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Processing...
+              </>
+            ) : (
+              `Confirm ${offer.type === 'rent' ? 'Rental' : 'Purchase'}`
+            )}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={isPending}
+            className="w-full rounded-lg px-4 py-3 text-sm font-medium text-gray-400 transition-colors hover:text-white disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Upgrade PIN confirmation modal ────────────────────────────────────────────
+
+interface UpgradePinModalProps {
+  requiredTier: string
+  requiredTierLabel: string
+  onSuccess: () => void
+  onClose: () => void
+}
+
+function UpgradePinModal({ requiredTier, requiredTierLabel, onSuccess, onClose }: UpgradePinModalProps) {
+  const [pin, setPin] = useState(['', '', '', ''])
+  const [pinError, setPinError] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [isUpgrading, setIsUpgrading] = useState(false)
+  const [upgraded, setUpgraded] = useState(false)
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+
+  useEffect(() => {
+    setTimeout(() => inputRefs.current[0]?.focus(), 100)
+  }, [])
+
+  const handlePinChange = (index: number, value: string) => {
+    if (!/^\d*$/.test(value)) return
+    const digit = value.slice(-1)
+    const newPin = [...pin]
+    newPin[index] = digit
+    setPin(newPin)
+    setPinError(null)
+
+    if (digit && index < 3) {
+      inputRefs.current[index + 1]?.focus()
+    }
+
+    if (digit && index === 3 && newPin.every(d => d !== '')) {
+      submitPin(newPin.join(''))
+    }
+  }
+
+  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !pin[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus()
+    }
+  }
+
+  const submitPin = async (pinCode: string) => {
+    setIsVerifying(true)
+    setPinError(null)
+    try {
+      const result = await verifyPin(pinCode)
+      if (result.verified) {
+        setIsUpgrading(true)
+        await upgradeSubscription(requiredTier)
+        setUpgraded(true)
+        onSuccess()
+      }
+    } catch (err: unknown) {
+      const error = err as { message?: string }
+      const isWrongPin = !isUpgrading
+      setPinError(isWrongPin ? (error.message || 'Incorrect PIN') : 'Upgrade failed. Please try again.')
+      setPin(['', '', '', ''])
+      setIsUpgrading(false)
+      setTimeout(() => inputRefs.current[0]?.focus(), 100)
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-sm rounded-xl border border-white/10 bg-surface-raised p-6 shadow-2xl">
+        {!upgraded ? (
+          <>
+            <h2 className="mb-1 text-lg font-semibold text-white">Confirm with PIN</h2>
+            <p className="mb-5 text-sm text-gray-400">
+              Enter your 4-digit PIN to upgrade to the{' '}
+              <span className="font-medium text-white">{requiredTierLabel} Plan</span>.
+            </p>
+
+            <div className="flex justify-center gap-3 mb-4">
+              {pin.map((digit, i) => (
+                <input
+                  key={i}
+                  ref={el => { inputRefs.current[i] = el }}
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={digit}
+                  onChange={e => handlePinChange(i, e.target.value)}
+                  onKeyDown={e => handleKeyDown(i, e)}
+                  disabled={isVerifying || isUpgrading}
+                  className="w-12 h-14 text-center text-xl font-bold text-white bg-surface-overlay border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50"
+                />
+              ))}
+            </div>
+
+            {isUpgrading && (
+              <p className="mb-4 text-center text-sm text-gray-400">Activating subscription…</p>
+            )}
+
+            {pinError && (
+              <p className="mb-4 text-center text-sm text-red-400">{pinError}</p>
+            )}
+
+            <button
+              onClick={onClose}
+              disabled={isVerifying || isUpgrading}
+              className="w-full rounded-lg px-4 py-3 text-sm font-medium text-gray-400 transition-colors hover:text-white disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="mb-5 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-green-500/20">
+                <svg className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+              </div>
+              <h2 className="text-lg font-semibold text-white">Subscription Upgraded!</h2>
+              <p className="mt-2 text-sm text-gray-400">
+                You now have access to the{' '}
+                <span className="font-medium text-white">{requiredTierLabel} Plan</span>.
+                Enjoy watching!
+              </p>
+            </div>
+
+            <button
+              onClick={onClose}
+              className="w-full rounded-lg bg-primary-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-primary-500"
+            >
+              Watch Now
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Simple inline toast ───────────────────────────────────────────────────────
+
+interface ToastState {
+  message: string
+  type: 'success' | 'error'
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TitleDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { profile } = useAuth()
+  const { profile, isAuthenticated } = useAuth()
   const queryClient = useQueryClient()
   const [selectedSeason, setSelectedSeason] = useState(1)
+  const [pendingOffer, setPendingOffer] = useState<AccessOption | null>(null)
+  const [showUpgradePinModal, setShowUpgradePinModal] = useState(false)
+  const [toast, setToast] = useState<ToastState | null>(null)
+
+  function showToast(message: string, type: 'success' | 'error') {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000)
+  }
 
   const { data: title, isLoading, error: titleError } = useQuery({
     queryKey: ['title', id, profile?.id],
@@ -44,7 +292,6 @@ export default function TitleDetailPage() {
   })
 
   const userRating = ratingData?.rating ?? null
-
   const isInWatchlist = watchlist?.some(w => w.title_id === id)
 
   const watchlistMutation = useMutation({
@@ -61,6 +308,24 @@ export default function TitleDetailPage() {
     mutationFn: (rating: 1 | -1) => rateTitle(profile!.id, { title_id: id!, rating }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rating', profile?.id, id] })
+    },
+  })
+
+  const purchaseMutation = useMutation({
+    mutationFn: ({ offerType }: { offerType: 'rent' | 'buy' }) =>
+      purchaseTitle(id!, offerType),
+    onSuccess: (data) => {
+      setPendingOffer(null)
+      const label = data.offer_type === 'rent'
+        ? 'Rental activated! You now have access.'
+        : 'Purchase complete! Enjoy the title.'
+      showToast(label, 'success')
+      // Refetch title so user_access is updated and Play button becomes active
+      queryClient.invalidateQueries({ queryKey: ['title', id] })
+    },
+    onError: () => {
+      setPendingOffer(null)
+      showToast('Purchase failed. Please try again.', 'error')
     },
   })
 
@@ -87,7 +352,6 @@ export default function TitleDetailPage() {
   if (isLoading || !title) {
     return (
       <div className="min-h-screen pt-14">
-        {/* Hero skeleton */}
         <div className="relative w-full h-[50vh] bg-surface-raised animate-pulse" />
         <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 -mt-20 relative z-10 space-y-4">
           <div className="h-10 w-80 bg-surface-overlay rounded animate-pulse" />
@@ -100,7 +364,30 @@ export default function TitleDetailPage() {
 
   const currentSeason = title.seasons.find(s => s.season_number === selectedSeason)
 
-  const handlePlay = () => {
+  // ── Access logic ─────────────────────────────────────────────────────────────
+  const userAccess = title.user_access
+  const hasAccess = userAccess?.has_access === true || userAccess?.access_type === 'free'
+  const isRental = userAccess?.access_type === 'tvod_rent'
+  const accessOptions = title.access_options ?? []
+  const rentOption = accessOptions.find(o => o.type === 'rent')
+  const buyOption = accessOptions.find(o => o.type === 'buy')
+
+  // Tier display helpers
+  const TIER_LABEL: Record<string, string> = { basic: 'Basic', standard: 'Standard', premium: 'Premium' }
+  const requiredTier = userAccess?.required_tier
+  const requiredTierLabel = requiredTier ? TIER_LABEL[requiredTier] ?? requiredTier : null
+
+  // "Included with …" label shown below the active Play button
+  const inclusionLabel: string | null = (() => {
+    if (!hasAccess) return null
+    if (userAccess?.access_type === 'free') return 'Free to watch'
+    if (userAccess?.access_type === 'tvod_buy') return 'Purchased'
+    if (userAccess?.access_type === 'svod' && requiredTierLabel) return `Included with ${requiredTierLabel} Plan`
+    if (userAccess?.access_type === 'svod') return 'Included with your plan'
+    return null
+  })()
+
+  function handlePlay() {
     if (title.title_type === 'movie') {
       navigate(`/play/movie/${title.id}`)
     } else if (currentSeason?.episodes.length) {
@@ -113,6 +400,41 @@ export default function TitleDetailPage() {
 
   return (
     <div className="min-h-screen pt-14 pb-12">
+      {/* Purchase confirmation modal */}
+      {pendingOffer && (
+        <PurchaseModal
+          titleName={title.title}
+          offer={pendingOffer}
+          onConfirm={() => purchaseMutation.mutate({ offerType: pendingOffer.type as 'rent' | 'buy' })}
+          onCancel={() => setPendingOffer(null)}
+          isPending={purchaseMutation.isPending}
+        />
+      )}
+
+      {/* Upgrade PIN confirmation modal */}
+      {showUpgradePinModal && requiredTier && requiredTierLabel && (
+        <UpgradePinModal
+          requiredTier={requiredTier}
+          requiredTierLabel={requiredTierLabel}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['title', id] })
+            queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+          }}
+          onClose={() => setShowUpgradePinModal(false)}
+        />
+      )}
+
+      {/* Inline toast */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg transition-all ${
+            toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Hero Section */}
       <div className="relative w-full h-[50vh] sm:h-[60vh] overflow-hidden">
         <img
@@ -144,16 +466,64 @@ export default function TitleDetailPage() {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-3 mb-6">
-          <button
-            onClick={handlePlay}
-            className="flex items-center gap-2 px-8 py-3 bg-white text-black font-semibold rounded-md hover:bg-white/90 transition-colors"
-          >
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            Play
-          </button>
+        <div className="flex flex-wrap items-center gap-3 mb-2">
+          {hasAccess ? (
+            /* User has access — show active Play button */
+            <button
+              onClick={handlePlay}
+              className="flex items-center gap-2 px-8 py-3 bg-white text-black font-semibold rounded-md hover:bg-white/90 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Play
+            </button>
+          ) : rentOption || buyOption ? (
+            /* No access but TVOD options exist — show locked Play + rent/buy CTAs */
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                disabled
+                className="flex items-center gap-2 px-8 py-3 bg-white/20 text-white/40 font-semibold rounded-md cursor-not-allowed"
+                title="Purchase or subscribe to watch"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
+                Play
+              </button>
+
+              {rentOption && rentOption.price_cents != null && rentOption.currency && (
+                <button
+                  onClick={() => setPendingOffer(rentOption)}
+                  className="flex items-center gap-2 px-5 py-3 bg-white/10 text-white font-medium rounded-md hover:bg-white/20 transition-colors border border-white/20"
+                >
+                  Rent {formatPrice(rentOption.price_cents, rentOption.currency)}
+                </button>
+              )}
+
+              {buyOption && buyOption.price_cents != null && buyOption.currency && (
+                <button
+                  onClick={() => setPendingOffer(buyOption)}
+                  className="flex items-center gap-2 px-5 py-3 bg-primary-600 text-white font-semibold rounded-md hover:bg-primary-500 transition-colors"
+                >
+                  Buy {formatPrice(buyOption.price_cents, buyOption.currency)}
+                </button>
+              )}
+            </div>
+          ) : (
+            /* No access and no purchase path — subscription / upgrade required */
+            <button
+              onClick={() => isAuthenticated ? setShowUpgradePinModal(true) : navigate('/login')}
+              className="flex items-center gap-2 px-8 py-3 bg-primary-600 text-white font-semibold rounded-md hover:bg-primary-500 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+              </svg>
+              {isAuthenticated && requiredTierLabel
+                ? `Upgrade to ${requiredTierLabel}`
+                : 'Subscribe to Watch'}
+            </button>
+          )}
 
           <button
             onClick={() => watchlistMutation.mutate()}
@@ -206,6 +576,30 @@ export default function TitleDetailPage() {
           </button>
         </div>
 
+        {/* Access label — "Included with Basic Plan", "Purchased", "Free to watch" */}
+        {inclusionLabel && (
+          <p className="mt-2 mb-1 text-sm text-gray-400 flex items-center gap-1.5">
+            <svg className="w-4 h-4 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+            </svg>
+            {inclusionLabel}
+          </p>
+        )}
+
+        {/* "Available on [Plan]" hint for locked SVOD titles with no purchase path */}
+        {!hasAccess && !rentOption && !buyOption && requiredTierLabel && (
+          <p className="mt-2 mb-1 text-sm text-gray-500">
+            Available on the <span className="text-white font-medium">{requiredTierLabel} Plan</span>
+          </p>
+        )}
+
+        {/* Rental expiry badge */}
+        {isRental && userAccess?.expires_at && (
+          <p className="mb-4 text-sm text-amber-400">
+            Rental expires: {formatExpiresAt(userAccess.expires_at)}
+          </p>
+        )}
+
         {/* Synopsis */}
         <p className="text-gray-300 text-base leading-relaxed max-w-3xl mb-8">
           {title.synopsis_long || title.synopsis_short}
@@ -256,8 +650,13 @@ export default function TitleDetailPage() {
               {currentSeason?.episodes.map(ep => (
                 <button
                   key={ep.id}
-                  onClick={() => navigate(`/play/episode/${ep.id}`)}
-                  className="w-full flex items-center gap-4 p-3 rounded-lg bg-surface-raised hover:bg-surface-overlay transition-colors text-left group"
+                  onClick={() => hasAccess && navigate(`/play/episode/${ep.id}`)}
+                  disabled={!hasAccess}
+                  className={`w-full flex items-center gap-4 p-3 rounded-lg bg-surface-raised transition-colors text-left group ${
+                    hasAccess
+                      ? 'hover:bg-surface-overlay cursor-pointer'
+                      : 'opacity-60 cursor-not-allowed'
+                  }`}
                 >
                   {/* Thumbnail */}
                   <div className="relative w-32 sm:w-40 aspect-video rounded overflow-hidden bg-surface-overlay shrink-0">
@@ -266,12 +665,22 @@ export default function TitleDetailPage() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
                       </svg>
                     </div>
-                    {/* Play icon overlay */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
-                      <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                    </div>
+                    {/* Play icon overlay (only when access granted) */}
+                    {hasAccess && (
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
+                        <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </div>
+                    )}
+                    {/* Lock icon overlay (when no access) */}
+                    {!hasAccess && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                        </svg>
+                      </div>
+                    )}
                   </div>
 
                   {/* Info */}
@@ -301,6 +710,8 @@ export default function TitleDetailPage() {
                 titleType={item.title_type}
                 releaseYear={item.release_year}
                 ageRating={item.age_rating}
+                accessOptions={item.access_options}
+                userAccess={item.user_access}
                 onClick={() => navigate(`/title/${item.id}`)}
               />
             ))}

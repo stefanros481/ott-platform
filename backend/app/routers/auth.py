@@ -4,14 +4,17 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.dependencies import DB, CurrentUser
+from app.dependencies import DB, CurrentUser, RedisClient
+from app.models.entitlement import ContentPackage, UserEntitlement
 from app.models.user import Profile
+from sqlalchemy import and_
 from app.schemas.auth import (
     LoginRequest,
     ProfileCreateRequest,
     ProfileResponse,
     RefreshRequest,
     RegisterRequest,
+    SubscriptionUpgradeRequest,
     TokenResponse,
     UserResponse,
 )
@@ -126,3 +129,62 @@ async def select_profile(
             detail="Profile not found",
         )
     return ProfileResponse.model_validate(profile)
+
+
+# ── Subscription upgrade ─────────────────────────────────────────────────────
+
+
+@router.patch("/subscription", response_model=UserResponse)
+async def upgrade_subscription(
+    body: SubscriptionUpgradeRequest,
+    user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+) -> UserResponse:
+    """Upgrade the current user's subscription to the requested tier.
+
+    Finds the package matching the requested tier, expires any existing SVOD
+    entitlement, creates a new one, and updates the user's subscription_tier.
+    Invalidates the entitlement cache so the change takes effect immediately.
+    """
+    from datetime import datetime, timezone
+    from app.services import entitlement_service
+
+    pkg = (
+        await db.execute(
+            select(ContentPackage).where(ContentPackage.tier == body.tier)
+        )
+    ).scalar_one_or_none()
+
+    if pkg is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No package found for tier '{body.tier}'",
+        )
+
+    now = datetime.now(timezone.utc)
+
+    # Expire existing SVOD entitlements
+    existing = await db.execute(
+        select(UserEntitlement).where(
+            and_(
+                UserEntitlement.user_id == user.id,
+                UserEntitlement.source_type == "subscription",
+            )
+        )
+    )
+    for ent in existing.scalars().all():
+        ent.expires_at = now
+    await db.flush()
+
+    # Create new entitlement
+    db.add(UserEntitlement(user_id=user.id, package_id=pkg.id, source_type="subscription"))
+
+    # Update display tier
+    user.subscription_tier = pkg.tier
+    await db.commit()
+    await db.refresh(user)
+
+    await entitlement_service.invalidate_entitlement_cache(user.id, redis)
+
+    return UserResponse.model_validate(user)

@@ -1,5 +1,20 @@
 import { apiFetch } from './client'
 
+export interface AccessOption {
+  type: 'svod' | 'rent' | 'buy' | 'free'
+  label: string
+  price_cents: number | null
+  currency: string | null
+  rental_window_hours: number | null
+}
+
+export interface UserAccess {
+  has_access: boolean
+  access_type: 'svod' | 'tvod_rent' | 'tvod_buy' | 'free' | null
+  expires_at: string | null
+  required_tier: 'basic' | 'standard' | 'premium' | null
+}
+
 export interface TitleListItem {
   id: string
   title: string
@@ -13,6 +28,8 @@ export interface TitleListItem {
   duration_minutes: number | null
   is_featured: boolean
   mood_tags: string[] | null
+  access_options: AccessOption[]
+  user_access: UserAccess | null
 }
 
 export interface PaginatedTitles {
@@ -66,6 +83,8 @@ export interface TitleDetail {
   mood_tags: string[] | null
   theme_tags: string[] | null
   ai_description: string | null
+  access_options: AccessOption[]
+  user_access: UserAccess | null
 }
 
 export interface CatalogParams {

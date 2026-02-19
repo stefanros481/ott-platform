@@ -8,6 +8,7 @@ import CatalogEditPage from '@/pages/CatalogEditPage'
 import ChannelListPage from '@/pages/ChannelListPage'
 import ScheduleEditPage from '@/pages/ScheduleEditPage'
 import UserListPage from '@/pages/UserListPage'
+import PackagesPage from '@/pages/PackagesPage'
 
 function AuthGuard() {
   const { isAuthenticated, isAdmin } = useAuth()
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="/channels" element={<ChannelListPage />} />
         <Route path="/schedule" element={<ScheduleEditPage />} />
         <Route path="/users" element={<UserListPage />} />
+        <Route path="/packages" element={<PackagesPage />} />
       </Route>
 
       {/* Catch-all */}
