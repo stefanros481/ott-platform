@@ -6,20 +6,27 @@ A hands-on learning project for exploring AI-assisted development with [Claude C
 
 This repo implements a working OTT platform (VOD catalog, EPG grid, live TV, recommendations, entitlements, and more) while deliberately exploring how Claude Code handles real software engineering tasks — not toy examples.
 
-The goal is to learn by doing: each feature branch (`001-*`, `002-*`, ...) represents a self-contained implementation challenge, approached with Claude Code as a primary development tool.
+The goal is to learn by doing: each numbered branch (`001-*`, `002-*`, ...) represents a self-contained feature implementation, built with Claude Code as the primary development tool. Browse the branches to see how individual features were approached and built.
+
+New features are developed using [speckit](https://github.com/speckit-ai/speckit) — a Claude Code skill that structures feature work through specs, plans, and tasks before writing any code.
 
 ## What You'll Find Here
 
 - A fully runnable backend (FastAPI + PostgreSQL + Redis) and two React frontends
 - AI-powered content recommendations using pgvector embeddings
 - Multi-profile auth, parental controls, entitlements, TVOD, and stream sessions
-- Progressive complexity across branches: from simple CRUD to ML-backed features
-- Design docs, PRDs, and user stories that informed each feature
+- Progressive complexity: from simple CRUD to ML-backed features
+- Design docs, PRDs, and user stories in `docs/` that informed each feature
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/) installed and running
 
 ## Quick Start
 
 ```bash
-cd docker
+git clone https://github.com/stefanros481/ott-platform.git
+cd ott-platform/docker
 docker compose up --build
 ```
 
@@ -118,7 +125,6 @@ curl -X POST "http://localhost:8000/api/v1/admin/embeddings/generate?regenerate=
 ## Project Structure
 
 ```
-ott-platform/
 ├── backend/                 # FastAPI app (Python/uv)
 │   └── app/
 │       ├── models/          # SQLAlchemy ORM models
@@ -133,5 +139,7 @@ ott-platform/
 │       ├── components/      # Reusable UI components
 │       └── context/         # Auth context
 ├── frontend-admin/          # Admin dashboard React app
-└── docker/                  # Docker Compose + init scripts
+├── docker/                  # Docker Compose + init scripts
+├── docs/                    # Design docs, PRDs, architecture, user stories
+└── specs/                   # Per-feature specs and validation quickstarts
 ```
