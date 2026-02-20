@@ -3,23 +3,35 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
-backend/.venv/
 
 # Node
 node_modules/
 dist/
-.env.local
 
 # Docker volumes
 docker/postgres/data/
 docker/redis/data/
 
-# Environment
+# Environment — match root and all subdirectories
 .env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
 
 # IDE
 .idea/
+.vscode/
+
+# Claude Code — local session state, not useful to share
+.claude/settings.json
+plans/
 
 # Playwright
 .playwright-mcp/
+
+# Logs & temp
+*.log
+*.sqlite

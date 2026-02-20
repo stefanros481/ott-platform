@@ -1,6 +1,20 @@
-# AI-Native OTT Streaming Platform — PoC
+# Learning Claude Code — via an OTT Streaming Platform
 
-Proof-of-concept for an AI-native OTT streaming platform with VOD/SVOD catalog, EPG grid, and content-based AI recommendations.
+A hands-on learning project for exploring AI-assisted development with [Claude Code](https://claude.ai/claude-code). The vehicle is a real-world OTT streaming platform: complex enough to encounter genuine engineering challenges, concrete enough to produce something you can actually run and interact with.
+
+## What This Is
+
+This repo implements a working OTT platform (VOD catalog, EPG grid, live TV, recommendations, entitlements, and more) while deliberately exploring how Claude Code handles real software engineering tasks — not toy examples.
+
+The goal is to learn by doing: each feature branch (`001-*`, `002-*`, ...) represents a self-contained implementation challenge, approached with Claude Code as a primary development tool.
+
+## What You'll Find Here
+
+- A fully runnable backend (FastAPI + PostgreSQL + Redis) and two React frontends
+- AI-powered content recommendations using pgvector embeddings
+- Multi-profile auth, parental controls, entitlements, TVOD, and stream sessions
+- Progressive complexity across branches: from simple CRUD to ML-backed features
+- Design docs, PRDs, and user stories in `../ott-platform-docs/` that informed each feature
 
 ## Quick Start
 
@@ -104,8 +118,7 @@ curl -X POST "http://localhost:8000/api/v1/admin/embeddings/generate?regenerate=
 ## Project Structure
 
 ```
-ott-platform-docs/
-├── docs/                    # Design docs, PRDs, user stories (23 files)
+ott-platform/
 ├── backend/                 # FastAPI app (Python/uv)
 │   └── app/
 │       ├── models/          # SQLAlchemy ORM models
@@ -121,4 +134,7 @@ ott-platform-docs/
 │       └── context/         # Auth context
 ├── frontend-admin/          # Admin dashboard React app
 └── docker/                  # Docker Compose + init scripts
+
+ott-platform-docs/           # Companion repo
+└── docs/                    # Design docs, PRDs, user stories (23 files)
 ```
