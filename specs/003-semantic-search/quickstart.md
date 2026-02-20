@@ -3,7 +3,7 @@
 ## Prerequisites
 
 ```bash
-cd /Users/stefan/code/ott-platform-docs/docker
+cd docker
 docker compose up --build
 ```
 

@@ -88,8 +88,8 @@ export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
 ```
 Create an agent team to generate a complete documentation suite for an AI-native 
-OTT streaming platform. The project directory is at ./ott-platform-docs/ with 
-subdirectories: docs/, docs/prd/, docs/user-stories/, docs/cross-cutting/.
+OTT streaming platform. The project directory is at ./docs/ with
+subdirectories: docs/prd/, docs/user-stories/, docs/cross-cutting/.
 
 Read CLAUDE.md for full orchestrator instructions and agent prompt details.
 
@@ -124,13 +124,10 @@ phase assignments (1-4), and cross-PRD dependency references.
 
 ```bash
 # Create project structure
-mkdir -p ott-platform-docs/docs/{prd,user-stories,cross-cutting}
+mkdir -p docs/{prd,user-stories,cross-cutting}
 
-# Copy the orchestrator + all agent prompts into CLAUDE.md
-cp claude-code-agents-ott-prompts.md ott-platform-docs/CLAUDE.md
-
-# Navigate to project
-cd ott-platform-docs
+# Navigate to project (already in root)
+# No cd needed — docs/ is a subdirectory of this repo
 
 # Enable agent teams
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
@@ -146,7 +143,6 @@ Then paste the Quick Start prompt above.
 If you prefer running agents one at a time (simpler, fewer tokens, easier to review):
 
 ```bash
-cd ott-platform-docs
 
 # Phase 1: Foundation
 claude "Read CLAUDE.md. Execute Agent 1: Create docs/01-project-vision-and-design.md"
@@ -170,8 +166,6 @@ claude "Read CLAUDE.md and all docs/. Execute Agent 12: Create cross-cutting doc
 ### Alternative: Subagents (parallel without inter-agent communication)
 
 ```bash
-cd ott-platform-docs
-
 # Run foundation sequentially
 claude "Execute Agents 1 and 2 from CLAUDE.md to create the vision and architecture docs."
 
@@ -1251,9 +1245,7 @@ Phase 3 (Sequential):   Agent 11 → Agent 12        (~15-20 min)
 
 ```bash
 # 1. Setup
-mkdir -p ott-platform-docs/docs/{prd,user-stories,cross-cutting}
-cp claude-code-agents-ott-prompts.md ott-platform-docs/CLAUDE.md
-cd ott-platform-docs
+mkdir -p docs/{prd,user-stories,cross-cutting}
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
 # 2. Launch Claude Code and paste the Quick Start prompt from Section 0
@@ -1278,8 +1270,6 @@ claude
 ### Sequential Execution
 
 ```bash
-cd ott-platform-docs
-
 # Foundation (must run first)
 claude "Read CLAUDE.md. Execute Agent 1: Create docs/01-project-vision-and-design.md"
 # Review output, then:
@@ -1299,8 +1289,6 @@ claude "Read CLAUDE.md and all files in docs/. Execute Agent 12: Create cross-cu
 ### Subagent Execution (Parallel PRDs, No Inter-Agent Communication)
 
 ```bash
-cd ott-platform-docs
-
 # Foundation (sequential)
 claude "Execute Agents 1 and 2 from CLAUDE.md to create vision and architecture docs."
 

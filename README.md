@@ -14,7 +14,7 @@ The goal is to learn by doing: each feature branch (`001-*`, `002-*`, ...) repre
 - AI-powered content recommendations using pgvector embeddings
 - Multi-profile auth, parental controls, entitlements, TVOD, and stream sessions
 - Progressive complexity across branches: from simple CRUD to ML-backed features
-- Design docs, PRDs, and user stories in `../ott-platform-docs/` that informed each feature
+- Design docs, PRDs, and user stories that informed each feature
 
 ## Quick Start
 
@@ -134,7 +134,4 @@ ott-platform/
 │       └── context/         # Auth context
 ├── frontend-admin/          # Admin dashboard React app
 └── docker/                  # Docker Compose + init scripts
-
-ott-platform-docs/           # Companion repo
-└── docs/                    # Design docs, PRDs, user stories (23 files)
 ```
