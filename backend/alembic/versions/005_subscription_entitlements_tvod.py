@@ -74,15 +74,25 @@ def upgrade() -> None:
         "ON user_entitlements (user_id, title_id, expires_at) WHERE title_id IS NOT NULL"
     )
 
-    # 5. Add content_packages.tier and max_streams
+    # 5. Add content_packages.tier, max_streams, price_cents, currency
     op.add_column("content_packages", sa.Column("tier", sa.String(20), nullable=True))
     op.add_column(
         "content_packages",
         sa.Column("max_streams", sa.Integer(), nullable=False, server_default="0"),
     )
+    op.add_column(
+        "content_packages",
+        sa.Column("price_cents", sa.Integer(), nullable=False, server_default="0"),
+    )
+    op.add_column(
+        "content_packages",
+        sa.Column("currency", sa.String(3), nullable=False, server_default="USD"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("content_packages", "currency")
+    op.drop_column("content_packages", "price_cents")
     op.drop_column("content_packages", "max_streams")
     op.drop_column("content_packages", "tier")
 
