@@ -63,7 +63,7 @@ function PackageForm({ initial, onSave, onCancel, isSaving }: PackageFormProps) 
   const [price, setPrice] = useState(
     initial?.price_cents != null ? String(initial.price_cents / 100) : ''
   )
-  const [currency, setCurrency] = useState(initial?.currency ?? 'USD')
+  const [currency, setCurrency] = useState(initial?.currency ?? 'NOK')
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -136,9 +136,9 @@ function PackageForm({ initial, onSave, onCancel, isSaving }: PackageFormProps) 
             onChange={e => setCurrency(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           >
-            <option value="USD">USD</option>
-            <option value="EUR">EUR</option>
-            <option value="GBP">GBP</option>
+            <option value="NOK">NOK</option>
+            <option value="DKK">DKK</option>
+            <option value="SEK">SEK</option>
           </select>
         </div>
       </div>
@@ -320,7 +320,7 @@ function OffersSection({ titleId, titleName }: OffersSectionProps) {
   const [showForm, setShowForm] = useState(false)
   const [offerType, setOfferType] = useState<'rent' | 'buy'>('rent')
   const [priceCents, setPriceCents] = useState('')
-  const [currency, setCurrency] = useState('USD')
+  const [currency, setCurrency] = useState('NOK')
   const [rentalHours, setRentalHours] = useState('48')
 
   const { data: offers = [], isLoading } = useQuery({
@@ -433,13 +433,13 @@ function OffersSection({ titleId, titleName }: OffersSectionProps) {
                 onChange={e => setCurrency(e.target.value)}
                 className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:border-indigo-500 focus:outline-none"
               >
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-                <option value="GBP">GBP</option>
+                <option value="NOK">NOK</option>
+                <option value="DKK">DKK</option>
+                <option value="SEK">SEK</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Price ($)</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Price</label>
               <input
                 required
                 type="number"

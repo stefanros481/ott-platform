@@ -1,14 +1,15 @@
 """Seed data for Feature 012 — Subscription Tiers, Entitlements & TVOD.
 
-Idempotent: checks before inserting. Safe to re-run.
+Idempotent: checks before inserting/updating. Safe to re-run.
 
 This seed MUST run AFTER seed_users (packages must already exist).
 
 What it does:
-  1. Updates the existing Basic/Standard/Premium packages with tier + max_streams.
-  2. Adds TitleOffers on a subset of catalog titles:
+  1. Updates the existing Basic/Standard/Premium packages with tier + max_streams
+     + Nordic pricing (NOK).
+  2. Adds/updates TitleOffers on a subset of catalog titles:
        - First 5 titles:       free (no auth required)
-       - Last 20 titles:       rent ($3.99 / 48h) + buy ($9.99)
+       - Last 40% of titles:   rent (49 NOK / 48h) + buy (129 NOK)
   3. Creates four quickstart test users (idempotent — skipped if email exists):
        - admin@test.com   (is_admin, Premium plan)
        - basic@test.com   (Basic plan, 1 stream)
@@ -69,13 +70,20 @@ TEST_USERS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Offer amounts
+# Nordic pricing (NOK as primary market currency)
 # ---------------------------------------------------------------------------
 
-RENT_PRICE_CENTS   = 399    # $3.99
-BUY_PRICE_CENTS    = 999    # $9.99
-RENT_WINDOW_HOURS  = 48
-CURRENCY           = "USD"
+RENT_PRICE_CENTS  = 4900   # 49 NOK
+BUY_PRICE_CENTS   = 12900  # 129 NOK
+RENT_WINDOW_HOURS = 48
+CURRENCY          = "NOK"
+
+# Subscription package pricing (NOK)
+PACKAGE_PRICING = {
+    "Basic":    9900,   # 99 NOK/mo
+    "Standard": 14900,  # 149 NOK/mo
+    "Premium":  24900,  # 249 NOK/mo
+}
 
 
 async def seed_entitlements(session: AsyncSession) -> dict[str, int]:
@@ -105,11 +113,17 @@ async def seed_entitlements(session: AsyncSession) -> dict[str, int]:
         if pkg.max_streams != attrs["max_streams"]:
             pkg.max_streams = attrs["max_streams"]
             changed = True
+        if pkg.price_cents != PACKAGE_PRICING.get(pkg_name, 0):
+            pkg.price_cents = PACKAGE_PRICING.get(pkg_name, 0)
+            changed = True
+        if pkg.currency != CURRENCY:
+            pkg.currency = CURRENCY
+            changed = True
         if changed:
             counts["packages_updated"] += 1
 
     await session.flush()
-    print(f"  [seed_entitlements] Updated {counts['packages_updated']} package(s) with tier/max_streams.")
+    print(f"  [seed_entitlements] Updated {counts['packages_updated']} package(s) with NOK pricing.")
 
     # ------------------------------------------------------------------
     # 2. Add TitleOffers
@@ -132,8 +146,10 @@ async def seed_entitlements(session: AsyncSession) -> dict[str, int]:
         basic_cutoff = int(len(all_title_ids) * 0.60)
         tvod_ids = all_title_ids[basic_cutoff:]
 
-        # Helper: check if offer already exists before inserting
-        async def _offer_exists(title_id: uuid.UUID, offer_type: str) -> bool:
+        nordic = {"NOK", "DKK", "SEK"}
+
+        # Helper: insert offer if missing, update currency/price if non-Nordic
+        async def _upsert_offer(title_id: uuid.UUID, offer_type: str, price_cents: int, currency: str, **kwargs) -> str:
             result = await session.execute(
                 select(TitleOffer).where(
                     and_(
@@ -142,40 +158,49 @@ async def seed_entitlements(session: AsyncSession) -> dict[str, int]:
                     )
                 )
             )
-            return result.scalar_one_or_none() is not None
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                session.add(TitleOffer(
+                    title_id=title_id,
+                    offer_type=offer_type,
+                    price_cents=price_cents,
+                    currency=currency,
+                    **kwargs,
+                ))
+                return "created"
+            elif existing.currency not in nordic:
+                existing.currency = currency
+                existing.price_cents = price_cents
+                return "updated"
+            return "skipped"
+
+        offers_created = 0
+        offers_updated = 0
 
         for tid in free_ids:
-            if not await _offer_exists(tid, "free"):
-                session.add(TitleOffer(
-                    title_id=tid,
-                    offer_type="free",
-                    price_cents=0,
-                    currency=CURRENCY,
-                ))
-                counts["title_offers"] += 1
+            action = await _upsert_offer(tid, "free", 0, CURRENCY)
+            if action == "created":
+                offers_created += 1
+            elif action == "updated":
+                offers_updated += 1
 
         for tid in tvod_ids:
-            if not await _offer_exists(tid, "rent"):
-                session.add(TitleOffer(
-                    title_id=tid,
-                    offer_type="rent",
-                    price_cents=RENT_PRICE_CENTS,
-                    currency=CURRENCY,
-                    rental_window_hours=RENT_WINDOW_HOURS,
-                ))
-                counts["title_offers"] += 1
+            action = await _upsert_offer(tid, "rent", RENT_PRICE_CENTS, CURRENCY, rental_window_hours=RENT_WINDOW_HOURS)
+            if action == "created":
+                offers_created += 1
+            elif action == "updated":
+                offers_updated += 1
 
-            if not await _offer_exists(tid, "buy"):
-                session.add(TitleOffer(
-                    title_id=tid,
-                    offer_type="buy",
-                    price_cents=BUY_PRICE_CENTS,
-                    currency=CURRENCY,
-                ))
-                counts["title_offers"] += 1
+            action = await _upsert_offer(tid, "buy", BUY_PRICE_CENTS, CURRENCY)
+            if action == "created":
+                offers_created += 1
+            elif action == "updated":
+                offers_updated += 1
+
+        counts["title_offers"] = offers_created
 
         await session.flush()
-        print(f"  [seed_entitlements] Created {counts['title_offers']} title offer(s).")
+        print(f"  [seed_entitlements] Created {offers_created} title offer(s), updated {offers_updated} to NOK currency.")
 
     # ------------------------------------------------------------------
     # 3. Create test users + entitlements (idempotent)

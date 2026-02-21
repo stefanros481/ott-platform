@@ -16,7 +16,7 @@ class PackageCreate(BaseModel):
     tier: str | None = None
     max_streams: int = Field(1, ge=1)
     price_cents: int = Field(0, ge=0)
-    currency: str = Field("USD", min_length=3, max_length=3)
+    currency: str = Field("NOK", min_length=3, max_length=3)
 
 
 class PackageUpdate(BaseModel):
@@ -35,7 +35,7 @@ class PackageResponse(BaseModel):
     tier: str | None = None
     max_streams: int = 0
     price_cents: int = 0
-    currency: str = "USD"
+    currency: str = "NOK"
     title_count: int = 0
 
     model_config = {"from_attributes": True}
@@ -47,7 +47,7 @@ class PackageResponse(BaseModel):
 class OfferCreate(BaseModel):
     offer_type: Literal["rent", "buy", "free"]
     price_cents: int = Field(0, ge=0)
-    currency: str = Field("USD", min_length=3, max_length=3)
+    currency: str = Field("NOK", min_length=3, max_length=3)
     rental_window_hours: int | None = Field(None, gt=0)
 
 

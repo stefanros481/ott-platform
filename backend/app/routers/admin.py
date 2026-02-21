@@ -552,6 +552,8 @@ async def _package_response(pkg: ContentPackage, db: AsyncSession) -> PackageRes
         description=pkg.description,
         tier=pkg.tier,
         max_streams=pkg.max_streams,
+        price_cents=pkg.price_cents,
+        currency=pkg.currency,
         title_count=title_count,
     )
 
