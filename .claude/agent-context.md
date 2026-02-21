@@ -1,0 +1,26 @@
+## Active Technologies
+- Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query (001-parental-rating-enforcement)
+- PostgreSQL 16 + pgvector (001-parental-rating-enforcement)
+- TypeScript 5+ / React 18 + shaka-player 4.12+, React, Tailwind CSS 3+ (002-video-player-controls)
+- N/A (UI-only, no data changes) (002-video-player-controls)
+- Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query, Shaka Player 4+, Tailwind CSS 3+ (004-continue-watching-bookmarks)
+- PostgreSQL 16 + pgvector, Redis 7 (optional for caching) (004-continue-watching-bookmarks)
+- Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), Pydantic Settings, python-jose, bcryp (005-backend-hardening)
+- PostgreSQL 16 + pgvector 0.7+ (existing — no schema changes) (005-backend-hardening)
+- Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), Pydantic Settings, python-jose (JWT), bcrypt (PIN hashing) (006-viewing-time-limits)
+- PostgreSQL 16 + pgvector 0.7+ (5 new tables, 1 migration) (006-viewing-time-limits)
+- Python 3.12 + FastAPI 0.115+, SQLAlchemy 2.0+ (async), bcrypt, python-jose (JWT), Pydantic Settings (009-backend-performance)
+- PostgreSQL 16 + pgvector 0.7+ (asyncpg driver) (009-backend-performance)
+- Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ (async), React 18, TanStack Query, Shaka Player 4+ (011-recs-watchlist-livetv)
+- PostgreSQL 16 + pgvector 0.7+ (existing schema, no new tables) (011-recs-watchlist-livetv)
+- Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-admin) + FastAPI 0.115+, SQLAlchemy 2.0+ async, Alembic 1.14+, slowapi (new), redis.asyncio 5.2+ (existing) (012-entitlements-tvod)
+- PostgreSQL 16 (primary), Redis 7 (rate limiting state + entitlement cache) (012-entitlements-tvod)
+- Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-client) + FastAPI 0.115+, SQLAlchemy 2.0+ async, sentence-transformers (all-MiniLM-L6-v2), pgvector 0.7+, Alembic 1.14+ (001-content-analytics-agent)
+- PostgreSQL 16 + pgvector — two new tables (`analytics_events`, `query_jobs`) via Alembic migration 006; `query_templates` seeded as application data (001-content-analytics-agent)
+- TypeScript 5+ / React 18 + React (hooks), Tailwind CSS 3+ — no new packages required (013-admin-analytics-ui)
+- In-memory React state only (session-scoped history); no localStorage, no DB (013-admin-analytics-ui)
+- Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-admin) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, Tailwind CSS 3+ (014-nordic-currencies)
+- PostgreSQL 16 — `content_packages` and `title_offers` tables (existing schema, no migration) (014-nordic-currencies)
+
+## Recent Changes
+- 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query
