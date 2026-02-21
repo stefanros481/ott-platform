@@ -165,7 +165,9 @@ TEMPLATES: list[QueryTemplate] = [
         description=(
             "What content drives SVoD upgrades? "
             "Which titles or genres motivate users to subscribe? "
-            "Show me content that correlates with subscription sign-ups."
+            "Show me content that correlates with subscription sign-ups. "
+            "What are the SVoD upgrade signals? "
+            "Which content acts as an upgrade trigger for subscription?"
         ),
         sql="""
             SELECT
@@ -202,7 +204,13 @@ TEMPLATES: list[QueryTemplate] = [
         description=(
             "Regional content preferences across markets. "
             "What do users prefer in different regions? "
-            "Show me genre popularity by country or market."
+            "Show me genre popularity by country or market. "
+            "Compare viewing patterns across NO, SE, DK. "
+            "Compare viewing habits across Nordic regions. "
+            "Regional breakdown of watching habits in Norway, Sweden, Denmark. "
+            "How do regions compare in content viewing? "
+            "Which content is popular in each region? "
+            "Show content preferences by region."
         ),
         sql="""
             SELECT
@@ -236,7 +244,9 @@ TEMPLATES: list[QueryTemplate] = [
         description=(
             "Engagement rate by content type Linear vs VoD. "
             "Compare viewing engagement across service types. "
-            "Show me how Linear, VoD, SVoD, and other services compare."
+            "Show me how Linear, VoD, SVoD, and other services compare. "
+            "Show me completion rates for SVoD. "
+            "What is the SVoD completion rate? Completion rates by service type."
         ),
         sql="""
             SELECT
@@ -338,7 +348,10 @@ TEMPLATES: list[QueryTemplate] = [
         description=(
             "What content do users browse but not watch? "
             "Show me high-browse low-play content. "
-            "Which titles attract browsing but not playback?"
+            "Which titles attract browsing but not playback? "
+            "Browse-without-watch patterns. "
+            "Show me browse-without-watch patterns. "
+            "Content users look at but don't play."
         ),
         sql="""
             SELECT
@@ -367,6 +380,110 @@ TEMPLATES: list[QueryTemplate] = [
             "{% if title %}{{ title }}{% else %}Content{% endif %} has "
             "{{ browse_count }} browses but only {{ browse_to_play_pct }}% convert to plays, "
             "suggesting a discovery gap. "
+            "Based on events since {{ coverage_start.strftime('%Y-%m-%d') }}."
+        ),
+    ),
+    QueryTemplate(
+        id="top_search_terms",
+        name="Top Search Terms",
+        description=(
+            "What are users searching for? "
+            "Show me the top search queries on the platform. "
+            "Which search terms are most popular? "
+            "What content are users looking for? "
+            "Show me search trends and popular search keywords."
+        ),
+        sql="""
+            SELECT
+                ae.extra_data->>'query'                           AS search_query,
+                COUNT(*)                                          AS search_count,
+                COUNT(DISTINCT ae.user_id)                        AS unique_users,
+                ae.service_type
+            FROM analytics_events ae
+            WHERE ae.event_type = 'search'
+              AND ae.extra_data->>'query' IS NOT NULL
+            GROUP BY ae.extra_data->>'query', ae.service_type
+            ORDER BY search_count DESC
+            LIMIT 20
+        """,
+        parameters=["regions", "start_date", "end_date"],
+        summary_tpl=(
+            "\"{% if search_query %}{{ search_query }}{% else %}drama series{% endif %}\" "
+            "is the top search term with {{ search_count }} searches by {{ unique_users }} unique users. "
+            "Based on events since {{ coverage_start.strftime('%Y-%m-%d') }}."
+        ),
+    ),
+    QueryTemplate(
+        id="watch_abandonment",
+        name="Watch Abandonment",
+        description=(
+            "Which titles do users start but not finish? "
+            "Show me content with high abandonment rate. "
+            "What content has low completion despite high play starts? "
+            "Which titles have poor retention after starting? "
+            "Show me watch drop-off by title."
+        ),
+        sql="""
+            SELECT
+                t.title,
+                g.name                                            AS genre,
+                COUNT(CASE WHEN ae.event_type = 'play_start' THEN 1 END)    AS play_starts,
+                ROUND(AVG(ae.watch_percentage))                   AS avg_watch_pct,
+                ROUND(
+                    100.0 * COUNT(CASE WHEN ae.event_type = 'play_complete' THEN 1 END)
+                    / NULLIF(COUNT(CASE WHEN ae.event_type = 'play_start' THEN 1 END), 0),
+                    1
+                )                                                 AS completion_rate_pct
+            FROM analytics_events ae
+            LEFT JOIN titles t ON ae.title_id = t.id
+            LEFT JOIN title_genres tg ON tg.title_id = t.id AND tg.is_primary = TRUE
+            LEFT JOIN genres g ON g.id = tg.genre_id
+            WHERE ae.event_type IN ('play_start', 'play_pause', 'play_complete')
+              AND t.title IS NOT NULL
+            GROUP BY t.title, g.name
+            HAVING COUNT(CASE WHEN ae.event_type = 'play_start' THEN 1 END) >= 2
+              AND ROUND(
+                    100.0 * COUNT(CASE WHEN ae.event_type = 'play_complete' THEN 1 END)
+                    / NULLIF(COUNT(CASE WHEN ae.event_type = 'play_start' THEN 1 END), 0),
+                    1
+                  ) < 50
+            ORDER BY play_starts DESC, avg_watch_pct ASC
+            LIMIT 20
+        """,
+        parameters=["regions", "start_date", "end_date"],
+        summary_tpl=(
+            "{% if title %}{{ title }}{% else %}Content{% endif %} has "
+            "{{ play_starts }} play starts but only {{ avg_watch_pct }}% average watch completion "
+            "({{ completion_rate_pct }}% full completions), indicating a retention problem. "
+            "Based on events since {{ coverage_start.strftime('%Y-%m-%d') }}."
+        ),
+    ),
+    QueryTemplate(
+        id="viewing_by_time_of_day",
+        name="Viewing Patterns by Time of Day",
+        description=(
+            "When do users watch content? "
+            "Show me viewing patterns by time of day. "
+            "What hours are peak viewing times? "
+            "Which time slots have the most plays? "
+            "Show me hourly viewing activity and peak hours."
+        ),
+        sql="""
+            SELECT
+                EXTRACT(HOUR FROM ae.occurred_at)::int            AS hour_of_day,
+                ae.service_type,
+                COUNT(CASE WHEN ae.event_type = 'play_start' THEN 1 END)    AS play_starts,
+                COUNT(CASE WHEN ae.event_type = 'play_complete' THEN 1 END) AS completions,
+                ROUND(AVG(ae.watch_percentage))                   AS avg_watch_pct
+            FROM analytics_events ae
+            WHERE ae.event_type IN ('play_start', 'play_complete')
+            GROUP BY EXTRACT(HOUR FROM ae.occurred_at)::int, ae.service_type
+            ORDER BY hour_of_day, play_starts DESC
+        """,
+        parameters=["regions", "start_date", "end_date", "service_type"],
+        summary_tpl=(
+            "Hour {{ hour_of_day }}:00 is a peak viewing slot for {{ service_type }} "
+            "with {{ play_starts }} play starts. "
             "Based on events since {{ coverage_start.strftime('%Y-%m-%d') }}."
         ),
     ),
@@ -598,8 +715,8 @@ def classify_complexity(template: QueryTemplate, params: QueryParameters) -> boo
     Cross-service comparison templates are always async. Otherwise, queries with
     >2 dimensions and at least 2 active filters are considered complex.
     """
-    # Cross-service templates always run async (multiple full-table aggregations)
-    if template.id in ("engagement_by_service", "cross_service_comparison"):
+    # Cross-dimension templates always run async (multiple full-table aggregations)
+    if template.id in ("engagement_by_service", "cross_service_comparison", "viewing_by_time_of_day"):
         return True
 
     # Count active filters

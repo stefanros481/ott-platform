@@ -19,7 +19,7 @@ New features are developed using [speckit](https://github.com/speckit-ai/speckit
 | ![EPG](assets/epg.png) | ![Title Detail](assets/title-detail.png) |
 | *EPG — 7-day TV guide grid with channel filters* | *Title detail — play, watchlist, ratings, cast* |
 | ![Profile Select](assets/profile-select.png) | ![Admin Dashboard](assets/admin-dashboard.png) |
-| *Profile selector — multi-profile per account* | *Admin dashboard — catalog, channels, users, embeddings* |
+| *Profile selector — multi-profile per account* | *Admin dashboard — catalog, channels, users, embeddings, analytics* |
 
 ## What You'll Find Here
 
@@ -79,6 +79,7 @@ First build takes ~5 min (Python deps + Node deps + sentence-transformers model 
 | Content embeddings | 70 |
 | Users | 5 |
 | Profiles | 10 |
+| Analytics events | ~600–1000 |
 
 Data is seeded automatically on first backend startup. To re-seed, delete the `postgres_data` volume and restart.
 
@@ -115,6 +116,8 @@ Single FastAPI monolith with router-based module separation:
 | Viewing | `/viewing/continue-watching`, `/bookmarks`, `/ratings`, `/watchlist` |
 | Recommendations | `/recommendations/home`, `/similar/{id}` |
 | Admin | `/admin/titles`, `/channels`, `/schedule`, `/embeddings/generate` |
+| Analytics | `/analytics/events` (event ingestion) |
+| Content Analytics | `/content-analytics/query`, `/content-analytics/jobs/{id}` (NL query agent) |
 
 ## AI Recommendations
 

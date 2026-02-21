@@ -153,12 +153,16 @@ question (string)
 
 ### Complexity Classification
 
-A query is classified as **complex** (async) when it requires cross-joining more than two aggregate dimensions (e.g., region × service_type × time_period × genre). Simple queries aggregate on one or two dimensions.
+A query is classified as **complex** (async) when:
+- It uses a cross-dimension template that always runs async: `engagement_by_service`, `cross_service_comparison`, `viewing_by_time_of_day`
+- Or it uses a multi-dimension template (`genre_revenue`, `revenue_growth`, `regional_preferences`) with two or more active filters (region + time, region + service, etc.)
+
+Simple queries (one or two aggregate dimensions, no multi-filter overlap) return synchronously.
 
 ### Template Embeddings
 
 On backend startup, the query engine service:
-1. Loads the 10 predefined `QueryTemplate` objects (hardcoded in `query_engine.py`)
+1. Loads the 13 predefined `QueryTemplate` objects (hardcoded in `query_engine.py`)
 2. Generates embeddings for each template description using the existing `sentence-transformers` model
 3. Stores embeddings in memory for the lifetime of the process
 
