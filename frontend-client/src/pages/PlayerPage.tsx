@@ -7,6 +7,7 @@ import { getBookmarkByContent, createStreamSession, heartbeatSession, stopSessio
 import { type Channel, type ScheduleEntry, getSchedule } from '../api/epg'
 import { useBookmarkSync } from '../hooks/useBookmarkSync'
 import { useViewingTime, useHeartbeat } from '../hooks/useViewingTime'
+import { useAnalytics } from '../hooks/useAnalytics'
 import LockScreen from '../components/LockScreen'
 import ViewingTimeWarning from '../components/ViewingTimeWarning'
 import VideoPlayer from '../components/VideoPlayer'
@@ -120,6 +121,18 @@ export default function PlayerPage() {
   }, [title, type, id, isLive, liveChannel, liveProgram])
 
   const { manifestUrl, displayTitle, contentType, contentId, nextEpisodeId } = playbackInfo
+
+  // Analytics tracking (fire-and-forget, never blocks playback)
+  const { trackPlay, trackPause, trackComplete } = useAnalytics()
+
+  // Track play_pause when player transitions from playing → paused
+  const wasPlayingRef = useRef(false)
+  useEffect(() => {
+    if (!playerIsPlaying && wasPlayingRef.current && contentId && !isLive) {
+      trackPause(contentId, 'VoD', streamSessionId.current ?? undefined, profile?.id)
+    }
+    wasPlayingRef.current = playerIsPlaying
+  }, [playerIsPlaying, contentId, isLive, profile?.id, trackPause])
 
   // Fetch existing bookmark to offer resume — always fetch fresh, never serve stale cache
   const { data: existingBookmark, isLoading: bookmarkLoading } = useQuery({
@@ -268,6 +281,10 @@ export default function PlayerPage() {
         }, 30_000)
 
         setStreamSessionReady(true)
+        // Track play_start after stream session is established
+        if (contentId && !isLive) {
+          trackPlay(contentId, 'VoD', session.session_id, profile?.id)
+        }
       } catch (err: any) {
         if (unmounted) return
         if (err?.status === 403) {
@@ -307,12 +324,22 @@ export default function PlayerPage() {
   }, [title, profile, saveNow])
 
   const handleEnded = useCallback(() => {
+    if (contentId && !isLive) {
+      trackComplete(
+        contentId,
+        'VoD',
+        streamSessionId.current ?? undefined,
+        profile?.id,
+        videoDuration > 0 ? Math.round(videoDuration) : undefined,
+        100,
+      )
+    }
     if (nextEpisodeId) {
       setNextEpisodeCountdown(10)
     } else {
       navigate(-1)
     }
-  }, [nextEpisodeId, navigate])
+  }, [nextEpisodeId, navigate, contentId, isLive, profile?.id, videoDuration, trackComplete])
 
   const handleResume = useCallback(() => {
     if (existingBookmark) {

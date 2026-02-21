@@ -1,0 +1,342 @@
+openapi: "3.1.0"
+info:
+  title: Content Analytics Query API
+  version: "1.0"
+  description: |
+    Natural language query agent for content and product team analytics.
+    Admin-only (FR-009). Supports synchronous and asynchronous query modes (FR-001b).
+
+paths:
+  /api/v1/content-analytics/query:
+    post:
+      operationId: submitQuery
+      summary: Submit a natural language analytics query
+      description: |
+        Accepts a natural language question and returns either:
+        - A synchronous result (status: "complete") for simple queries that resolve within 2s
+        - A job ID (status: "pending") for complex queries that exceed the synchronous window
+        - A clarification request (status: "clarification") when the question is too ambiguous
+
+        Admin authentication required (FR-009).
+      tags:
+        - content-analytics
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+            examples:
+              simple:
+                summary: Simple genre revenue question
+                value:
+                  question: "Which genres drive SVoD revenue?"
+              filtered:
+                summary: Regional + time filter
+                value:
+                  question: "Show me regional content preferences in Norway last month"
+              cross_service:
+                summary: Cross-service comparison
+                value:
+                  question: "What's the engagement rate by content type, Linear vs VoD?"
+              ambiguous:
+                summary: Ambiguous question that triggers clarification
+                value:
+                  question: "How is content doing?"
+      responses:
+        "200":
+          description: |
+            Query resolved synchronously. Response varies by status:
+            - "complete": result is populated
+            - "clarification": clarifying_question and context are populated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+              examples:
+                complete:
+                  summary: Synchronous result
+                  value:
+                    status: "complete"
+                    result:
+                      summary: "Drama and Thriller genres drive the highest SVoD engagement, with Drama leading at 78% completion rate across Norwegian and Swedish viewers in the last quarter."
+                      confidence: 0.91
+                      data:
+                        - genre: "Drama"
+                          service_type: "SVoD"
+                          event_count: 1240
+                          completion_rate: 0.78
+                          region: "all"
+                        - genre: "Thriller"
+                          service_type: "SVoD"
+                          event_count: 890
+                          completion_rate: 0.71
+                          region: "all"
+                      applied_filters:
+                        region: null
+                        time_period: null
+                        service_type: "SVoD"
+                      data_sources: ["analytics_events", "titles"]
+                      data_freshness: "2026-02-21T10:30:00Z"
+                      coverage_start: "2025-11-15T00:00:00Z"
+                    job_id: null
+                clarification:
+                  summary: Ambiguous query — clarification requested
+                  value:
+                    status: "clarification"
+                    result: null
+                    job_id: null
+                    clarification:
+                      type: "clarification"
+                      clarifying_question: "Which aspect of content performance are you interested in? For example: revenue, engagement rate, completion rate, or viewership numbers?"
+                      context: "The question 'How is content doing?' does not specify which metric to measure."
+        "202":
+          description: Complex query accepted for async processing. Poll /jobs/{job_id} for result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+              example:
+                status: "pending"
+                job_id: "d4e5f6a7-0000-0000-0000-000000000001"
+                result: null
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Request validation error (question too short/long)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/content-analytics/jobs/{job_id}:
+    get:
+      operationId: getJobStatus
+      summary: Poll for async query job result
+      description: |
+        Returns the current status of an async query job.
+        A user can only access their own jobs — querying another user's job returns 404 (FR-009).
+        When status is "failed", error_message contains a human-readable explanation.
+      tags:
+        - content-analytics
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Job ID returned by POST /content-analytics/query
+      responses:
+        "200":
+          description: Job status and result (if complete)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatusResponse"
+              examples:
+                pending:
+                  summary: Job still processing
+                  value:
+                    job_id: "d4e5f6a7-0000-0000-0000-000000000001"
+                    status: "pending"
+                    submitted_at: "2026-02-21T10:00:00Z"
+                    completed_at: null
+                    result: null
+                    error_message: null
+                complete:
+                  summary: Job completed with result
+                  value:
+                    job_id: "d4e5f6a7-0000-0000-0000-000000000001"
+                    status: "complete"
+                    submitted_at: "2026-02-21T10:00:00Z"
+                    completed_at: "2026-02-21T10:00:18Z"
+                    result:
+                      summary: "Cloud PVR usage is concentrated on prime-time Linear content, with Sports and Drama dominating recordings. PVR users show 23% higher completion rates than live viewers of the same content."
+                      confidence: 0.85
+                      data:
+                        - service_type: "Cloud_PVR"
+                          genre: "Sports"
+                          recording_count: 340
+                          avg_completion_rate: 0.88
+                        - service_type: "Cloud_PVR"
+                          genre: "Drama"
+                          recording_count: 280
+                          avg_completion_rate: 0.82
+                      applied_filters:
+                        region: null
+                        time_period: null
+                        service_type: "Cloud_PVR"
+                      data_sources: ["analytics_events", "titles"]
+                      data_freshness: "2026-02-21T10:30:00Z"
+                      coverage_start: "2025-11-15T00:00:00Z"
+                    error_message: null
+                failed:
+                  summary: Job failed with error
+                  value:
+                    job_id: "d4e5f6a7-0000-0000-0000-000000000002"
+                    status: "failed"
+                    submitted_at: "2026-02-21T10:05:00Z"
+                    completed_at: "2026-02-21T10:05:03Z"
+                    result: null
+                    error_message: "No analytics data available for the requested region and time period."
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not an admin user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Job not found or belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    QueryRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          minLength: 3
+          maxLength: 1000
+          description: Natural language question about OTT content performance
+          example: "Which genres drive SVoD revenue?"
+
+    QueryResult:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: Plain-English paragraph summarising the key insight
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Confidence score for the query interpretation (0.0–1.0)
+        data:
+          type: array
+          items:
+            type: object
+          description: |
+            Tabular result rows. Schema varies by query type. Common fields:
+            genre, service_type, region, event_count, completion_rate, watch_percentage
+        applied_filters:
+          type: object
+          description: Filters extracted from the question and applied to the query
+          properties:
+            region:
+              type: string
+              nullable: true
+            time_period:
+              type: string
+              nullable: true
+            service_type:
+              type: string
+              nullable: true
+        data_sources:
+          type: array
+          items:
+            type: string
+          description: Database tables/entities that contributed to the result (FR-007)
+        data_freshness:
+          type: string
+          format: date-time
+          description: Timestamp of the most recent event included in the result (FR-008)
+        coverage_start:
+          type: string
+          format: date-time
+          description: Earliest event timestamp in the analytics dataset (FR-008)
+
+    ClarificationResponse:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [clarification]
+        clarifying_question:
+          type: string
+          description: Single focused question to resolve the ambiguity
+        context:
+          type: string
+          description: Explanation of what aspect of the query is ambiguous
+
+    QueryResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [complete, pending, clarification]
+        result:
+          $ref: "#/components/schemas/QueryResult"
+          nullable: true
+          description: Populated when status is "complete"
+        job_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Populated when status is "pending"
+        clarification:
+          $ref: "#/components/schemas/ClarificationResponse"
+          nullable: true
+          description: Populated when status is "clarification"
+
+    JobStatusResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, complete, failed]
+        submitted_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        result:
+          $ref: "#/components/schemas/QueryResult"
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string

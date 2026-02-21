@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams, Navigate } from 'react-router-dom'
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getGenres, getTitles, type CatalogParams } from '../api/catalog'
+import { useAnalytics } from '../hooks/useAnalytics'
 import TitleCard from '../components/TitleCard'
 
 type TitleType = 'all' | 'movie' | 'series'
@@ -13,6 +14,14 @@ export default function BrowsePage() {
   const { profile } = useAuth()
   const [selectedGenre, setSelectedGenre] = useState(genreParam || '')
   const [titleType, setTitleType] = useState<TitleType>('all')
+
+  const { trackBrowse } = useAnalytics()
+
+  // Emit a browse event on page load and whenever the filter selection changes
+  useEffect(() => {
+    trackBrowse('VoD', { genre: selectedGenre || null, title_type: titleType })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGenre, titleType])
 
   const { data: genres } = useQuery({
     queryKey: ['genres'],

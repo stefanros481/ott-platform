@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getTitles, semanticSearch } from '../api/catalog'
 import type { SearchResultItem } from '../api/catalog'
+import { useAnalytics } from '../hooks/useAnalytics'
 import TitleCard from '../components/TitleCard'
 
 export default function SearchPage() {
@@ -26,6 +27,16 @@ export default function SearchPage() {
     }, 300)
     return () => clearTimeout(timer)
   }, [query])
+
+  const { trackSearch } = useAnalytics()
+
+  // Emit a search event each time the debounced query resolves to a non-trivial string
+  useEffect(() => {
+    if (debouncedQuery.length >= 2) {
+      trackSearch(debouncedQuery, 'VoD')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery])
 
   // T009: Primary semantic search query
   const {

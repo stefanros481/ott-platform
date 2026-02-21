@@ -7,3 +7,4 @@ from app.models.stream_sessions import StreamSession  # noqa: F401
 from app.models.user import Profile, RefreshToken, User  # noqa: F401
 from app.models.viewing import Bookmark, Rating, WatchlistItem  # noqa: F401
 from app.models.viewing_time import TimeGrant, ViewingSession, ViewingTimeBalance, ViewingTimeConfig  # noqa: F401
+from app.models.analytics import AnalyticsEvent, QueryJob  # noqa: F401

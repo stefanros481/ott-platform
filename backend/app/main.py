@@ -66,7 +66,19 @@ app.add_middleware(
 )
 
 # Import and mount routers
-from app.routers import admin, auth, catalog, epg, offers, parental_controls, recommendations, viewing, viewing_time
+from app.routers import (
+    admin,
+    analytics,
+    auth,
+    catalog,
+    content_analytics,
+    epg,
+    offers,
+    parental_controls,
+    recommendations,
+    viewing,
+    viewing_time,
+)
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(catalog.router, prefix="/api/v1/catalog", tags=["Catalog"])
@@ -77,6 +89,9 @@ app.include_router(viewing.router, prefix="/api/v1/viewing", tags=["Viewing"])
 app.include_router(parental_controls.router, prefix="/api/v1/parental-controls", tags=["Parental Controls"])
 app.include_router(viewing_time.router, prefix="/api/v1/viewing-time", tags=["Viewing Time"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
+# Feature 001: Content Analytics Agent
+app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytics"])
+app.include_router(content_analytics.router, prefix="/api/v1/content-analytics", tags=["Content Analytics"])
 
 
 @app.get("/health/live")

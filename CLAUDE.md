@@ -1349,6 +1349,8 @@ After all agents complete, review the outputs against these criteria:
 - PostgreSQL 16 + pgvector 0.7+ (existing schema, no new tables) (011-recs-watchlist-livetv)
 - Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-admin) + FastAPI 0.115+, SQLAlchemy 2.0+ async, Alembic 1.14+, slowapi (new), redis.asyncio 5.2+ (existing) (012-entitlements-tvod)
 - PostgreSQL 16 (primary), Redis 7 (rate limiting state + entitlement cache) (012-entitlements-tvod)
+- Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-client) + FastAPI 0.115+, SQLAlchemy 2.0+ async, sentence-transformers (all-MiniLM-L6-v2), pgvector 0.7+, Alembic 1.14+ (001-content-analytics-agent)
+- PostgreSQL 16 + pgvector — two new tables (`analytics_events`, `query_jobs`) via Alembic migration 006; `query_templates` seeded as application data (001-content-analytics-agent)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

@@ -18,6 +18,7 @@ dependencies = [
     "sentence-transformers>=3.3",
     "httpx>=0.28",
     "slowapi>=0.1.9",
+    "jinja2>=3.1.6",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -1,0 +1,173 @@
+openapi: "3.1.0"
+info:
+  title: Analytics Events API
+  version: "1.0"
+  description: |
+    Endpoint for the client app to submit user interaction analytics events.
+    Non-blocking — failure does not affect the viewer experience (FR-011).
+
+paths:
+  /api/v1/analytics/events:
+    post:
+      operationId: submitAnalyticsEvent
+      summary: Submit a client-side analytics event
+      description: |
+        Records a user interaction event (play, pause, complete, browse, search).
+        Returns 201 immediately. Processing is synchronous but lightweight.
+        Authentication required — event is tied to the authenticated user.
+        Failures MUST be caught and suppressed by the client (FR-011).
+      tags:
+        - analytics
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyticsEventCreate"
+            examples:
+              play_start:
+                summary: User starts playing a VoD title
+                value:
+                  event_type: "play_start"
+                  title_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  service_type: "VoD"
+                  profile_id: "7fb92a31-1234-5678-abcd-ef0123456789"
+                  region: "NO"
+                  occurred_at: "2026-02-21T19:30:00Z"
+                  session_id: "abc12345-0000-0000-0000-000000000001"
+              play_complete:
+                summary: User completes watching a title
+                value:
+                  event_type: "play_complete"
+                  title_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  service_type: "SVoD"
+                  profile_id: "7fb92a31-1234-5678-abcd-ef0123456789"
+                  region: "SE"
+                  occurred_at: "2026-02-21T21:15:00Z"
+                  session_id: "abc12345-0000-0000-0000-000000000001"
+                  duration_seconds: 5580
+                  watch_percentage: 98
+              browse:
+                summary: User browses content catalog
+                value:
+                  event_type: "browse"
+                  service_type: "VoD"
+                  region: "DK"
+                  occurred_at: "2026-02-21T20:00:00Z"
+                  extra_data:
+                    genre_filter: "Drama"
+              search:
+                summary: User submits a search query
+                value:
+                  event_type: "search"
+                  service_type: "SVoD"
+                  region: "NO"
+                  occurred_at: "2026-02-21T20:05:00Z"
+                  extra_data:
+                    query: "nordic crime drama"
+      responses:
+        "201":
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    description: ID of the created event record
+              example:
+                id: "9a1b2c3d-0000-0000-0000-000000000099"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error (invalid event_type, missing required fields)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error — client MUST suppress and continue normally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AnalyticsEventCreate:
+      type: object
+      required:
+        - event_type
+        - service_type
+        - region
+        - occurred_at
+      properties:
+        event_type:
+          type: string
+          enum: [play_start, play_pause, play_complete, browse, search]
+          description: Type of interaction
+        title_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the title involved. Null for browse/search without a specific title.
+        service_type:
+          type: string
+          enum: [Linear, VoD, SVoD, TSTV, Catch_up, Cloud_PVR]
+          description: OTT service type context
+        profile_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Active profile ID. Null if no profile selected.
+        region:
+          type: string
+          maxLength: 10
+          description: ISO country code of the viewer (e.g., "NO", "SE", "DK")
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the event occurred on the client (UTC)
+        session_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Groups play_start → play_pause → play_complete events for one viewing session
+        duration_seconds:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Total seconds watched. Populated only for play_complete events.
+        watch_percentage:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Percentage of title watched (0–100). Populated only for play_complete.
+        extra_data:
+          type: object
+          nullable: true
+          description: |
+            Event-specific supplementary data. Examples:
+            - browse: { "genre_filter": "Drama", "type_filter": "movie" }
+            - search: { "query": "nordic crime" }
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string

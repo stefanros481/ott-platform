@@ -867,13 +867,14 @@ wheels = [
 
 [[package]]
 name = "ott-platform-poc"
-version = "0.1.0"
+version = "2026.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "jinja2" },
     { name = "passlib", extra = ["bcrypt"] },
     { name = "pgvector" },
     { name = "pydantic" },
@@ -892,6 +893,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "pydantic", specifier = ">=2.10" },
