@@ -10,6 +10,17 @@ The goal is to learn by doing: each numbered branch (`001-*`, `002-*`, ...) repr
 
 New features are developed using [speckit](https://github.com/speckit-ai/speckit) — a Claude Code skill that structures feature work through specs, plans, and tasks before writing any code.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Home](assets/home.png) | ![Browse](assets/browse.png) |
+| *Home — personalized hero + content rails* | *Browse — full catalog with genre & type filters* |
+| ![EPG](assets/epg.png) | ![Title Detail](assets/title-detail.png) |
+| *EPG — 7-day TV guide grid with channel filters* | *Title detail — play, watchlist, ratings, cast* |
+| ![Profile Select](assets/profile-select.png) | ![Admin Dashboard](assets/admin-dashboard.png) |
+| *Profile selector — multi-profile per account* | *Admin dashboard — catalog, channels, users, embeddings* |
+
 ## What You'll Find Here
 
 - A fully runnable backend (FastAPI + PostgreSQL + Redis) and two React frontends
