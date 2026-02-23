@@ -1,5 +1,7 @@
 # Learning Claude Code — via an OTT Streaming Platform
 
+> **Disclaimer:** This project is a learning playground for exploring AI-native platform design. It is not production-ready and not intended for real-world deployment.
+
 A hands-on learning project for exploring AI-assisted development with [Claude Code](https://claude.ai/claude-code). The vehicle is a real-world OTT streaming platform: complex enough to encounter genuine engineering challenges, concrete enough to produce something you can actually run and interact with.
 
 ## What This Is
