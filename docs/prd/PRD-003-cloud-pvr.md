@@ -2,9 +2,9 @@
 ## AI-Native OTT Streaming Platform
 
 **Document ID:** PRD-003
-**Version:** 1.0
-**Date:** 2026-02-08
-**Status:** Draft
+**Version:** 1.1
+**Date:** 2026-02-23
+**Status:** Draft — Updated to align with TSTV shared infrastructure
 **Author:** PRD Writer A
 **References:** VIS-001 (Project Vision & Design), ARCH-001 (Platform Architecture), PRD-001 (Live TV), PRD-002 (TSTV)
 **Stakeholders:** Product Management, Engineering (Platform, Client, AI/ML), Content Rights, Legal, SRE
@@ -500,6 +500,33 @@ The core design principle of Cloud PVR is copy-on-write: a single physical recor
 4. When user A deletes the recording, only the user recording entry is removed. The master recording and its physical segments remain (as long as at least one user recording references them).
 5. When the last user recording referencing a master recording is deleted, a garbage collection job removes the physical segments from S3 (after a safety retention period of 7 days).
 
+**PoC schema note:** The `recordings` and `series_links` tables are created during the TSTV implementation phase (even though Cloud PVR is deferred) to avoid a future migration. The PoC schema for these tables is:
+
+```sql
+CREATE TABLE recordings (
+    id                SERIAL PRIMARY KEY,
+    user_id           INTEGER REFERENCES users(id),
+    schedule_entry_id INTEGER REFERENCES schedule_entries(id),
+    channel_id        VARCHAR(20),
+    requested_at      TIMESTAMPTZ DEFAULT NOW(),
+    status            VARCHAR(20) DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'recording', 'completed', 'failed')),
+    recorded_start    TIMESTAMPTZ,   -- actual segment range start (set when recording activates)
+    recorded_end      TIMESTAMPTZ,   -- actual segment range end (set when program ends)
+    expires_at        TIMESTAMPTZ,   -- retention lock: cleanup cron must not delete segments before this date
+    deleted           BOOLEAN DEFAULT FALSE  -- soft delete (user removed from library)
+);
+
+CREATE TABLE series_links (
+    id          SERIAL PRIMARY KEY,
+    user_id     INTEGER REFERENCES users(id),
+    series_id   VARCHAR(100) NOT NULL,   -- matches schedule_entries.series_id
+    channel_id  VARCHAR(20),             -- optional: restrict to specific channel
+    active      BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
 **Storage Efficiency:**
 - If 10,000 users record the same Champions League match (2.5 hours), the physical storage is 2.5 hours (same as 1 user). The 10,000 user recording entries are lightweight metadata rows in PostgreSQL.
 - Expected copy-on-write ratio: 10:1 at Phase 1 (popular programs recorded by many users), improving to 15:1 at Phase 4 as the user base grows.
@@ -521,6 +548,23 @@ EPG Service (schedule) → Recording Scheduler (K8s CronJob)
                                        ▼
                               Master Recording
                               (manifest + segments)
+```
+
+**PoC simplification:** The production capture architecture (Go workers, K8s CronJob, S3) is replaced by a metadata-only model in the PoC. When a user schedules a recording:
+1. A `pending` row is created in the `recordings` table.
+2. A FastAPI async background task (runs every 30 seconds) advances recording status based on wall-clock time vs `schedule_entries.start_time` / `end_time`: `pending → recording → completed`.
+3. Playback uses the TSTV manifest generator (Section 7.4) — no separate capture pipeline needed.
+4. The `recordings.expires_at` field acts as a retention lock: the segment cleanup cron in the CDN container must check this field before deleting any segment whose wall-clock time falls within an active recording's `recorded_start`–`recorded_end` range.
+
+```python
+# Simplified PVR scheduler loop (PoC)
+async def pvr_scheduler():
+    while True:
+        now = datetime.utcnow()
+        # Activate pending recordings whose program has started
+        # Complete recordings whose program has ended + set expires_at (now + 90 days)
+        # Auto-create pending recordings from active series_links
+        await asyncio.sleep(30)
 ```
 
 **Recording Scheduler:**
@@ -560,11 +604,34 @@ user_quota_hours = SUM(duration_hours) for all user_recordings WHERE user_id = X
 
 ### 7.4 Integration with TSTV
 
-Cloud PVR and TSTV (PRD-002) share significant infrastructure:
+Cloud PVR and TSTV (PRD-002) share the same underlying segment archive. The key integration points are:
 
-- **Shared segments**: if a channel is both catch-up-enabled and PVR-enabled, the same segments stored for catch-up can be referenced by PVR master recordings. No duplication.
-- **"Record from beginning" via start-over buffer**: when a user records a live program "from the beginning" (having already watched part of it live), the segments for the already-aired portion come from the EFS start-over buffer (if still available) or from the S3 catch-up storage (if the ingest-to-catch-up pipeline has already processed them).
-- **Cross-service handoff**: the "Record to PVR" button in catch-up browse (PRD-002) creates a user recording pointer to the catch-up master recording, extending its retention beyond the 7-day catch-up window.
+- **Shared segments**: if a channel is both catch-up-enabled and PVR-enabled, the same segments stored for catch-up are referenced by PVR recordings. No duplication. A recording row is an entitlement and a retention lock pointing to a time range in the shared segment archive.
+
+- **"Record from beginning" via start-over buffer**: when a user records a live program "from the beginning," the segments for the already-aired portion come from the start-over buffer (same shared archive). The recording `recorded_start` is set to the program's `schedule_entry.start_time`.
+
+- **Cross-service handoff**: the "Record to PVR" button in catch-up browse creates a recording row pointing to the same time range. This sets `expires_at` beyond the CUTV window, acting as a retention lock that prevents the CDN cleanup cron from deleting those segments.
+
+- **Retention lock enforcement**: the CDN cleanup cron checks the `recordings` table before deleting segments older than `cutv_window_hours`. A segment is only deleted if:
+  1. Its wall-clock timestamp is older than the channel's `catchup_window_hours`, AND
+  2. No active recording row has `recorded_start ≤ seg_time ≤ recorded_end` AND `expires_at > now` AND `deleted = FALSE`
+
+  ```python
+  # In cleanup logic (pseudocode)
+  for seg_file in candidate_deletion_files:
+      seg_time = parse_time_from_filename(seg_file)  # ch1-20260223143000.ts
+      locked = db.query(Recording).filter(
+          Recording.channel_id == channel_key,
+          Recording.recorded_start <= seg_time,
+          Recording.recorded_end >= seg_time,
+          Recording.expires_at > now,
+          Recording.deleted == False
+      ).exists()
+      if not locked:
+          os.remove(seg_file)
+  ```
+
+- **Playback manifest reuse**: PVR playback uses the same VOD manifest generator as catch-up (`GET /pvr/recordings/{id}/manifest` calls the same underlying `get_segments_in_range()` function as catch-up, using `recorded_start` and `recorded_end` as bounds).
 
 ### 7.5 DRM for Recordings
 
@@ -648,3 +715,5 @@ Cloud PVR and TSTV (PRD-002) share significant infrastructure:
 ---
 
 *This PRD defines the Cloud PVR service for the AI-native OTT streaming platform. It should be read alongside PRD-001 (Live TV) for recording capture integration, PRD-002 (TSTV) for shared infrastructure and catch-up overlap, PRD-005 (EPG) for recording scheduling, and PRD-007 (AI User Experience) for the recommendation and intelligence capabilities that power AI recording suggestions and smart retention.*
+
+*v1.1 update (2026-02-23): Updated Section 7.1 with PoC schema for `recordings` and `series_links` tables (pre-created during TSTV implementation). Updated Section 7.2 with PoC metadata-only recording model and async scheduler. Updated Section 7.4 with retention lock mechanism for shared segment archive. See [tstv-implementation-plan.md](../../plans/tstv-implementation-plan.md) for the PoC implementation guide.*

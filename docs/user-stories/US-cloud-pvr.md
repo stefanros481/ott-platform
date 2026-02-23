@@ -785,30 +785,32 @@
 
 ---
 
-### US-PVR-029: Copy-on-Write Garbage Collection
+### US-PVR-029: Segment Retention Lock for Active Recordings
 
 **As a** developer
-**I want to** have automated garbage collection for master recordings that no user references
-**So that** S3 storage does not grow indefinitely with orphaned content
+**I want to** prevent the CDN cleanup cron from deleting HLS segments that are still referenced by an active PVR recording
+**So that** recorded content remains playable beyond the standard CUTV window
 
 **Priority:** P0
 **Phase:** 1
 **Story Points:** M
-**PRD Reference:** Technical Section 7.1
+**PRD Reference:** Technical Section 7.1, Section 7.4 (updated v1.1)
 
 **Acceptance Criteria:**
-- [ ] Given the last user recording pointer to a master recording is deleted, when garbage collection runs, then the master recording and its physical segments are removed from S3 after a 7-day safety retention period
-- [ ] Given the garbage collection job, when scheduled, then it runs daily during off-peak hours
-- [ ] Given shared segments between catch-up and PVR, when a segment is referenced by either service, then it is not deleted
+- [ ] Given a recording row with `status='completed'` and `expires_at` in the future, when the CDN cleanup cron runs, then no segment whose wall-clock timestamp falls within `recorded_start`–`recorded_end` for that recording is deleted
+- [ ] Given the last recording referencing a segment expires (`expires_at < now` or `deleted=TRUE`), when the cleanup cron runs, then the segment is eligible for deletion (subject to CUTV window check)
+- [ ] Given the cleanup cron, when scheduled, then it runs daily in the CDN container and processes all channels
+- [ ] Given a segment is referenced by both an active catch-up window AND an active recording, when cleanup evaluates it, then it is retained (the more restrictive retention wins)
+- [ ] Performance: Cleanup cron completes within 5 minutes per channel for a 7-day segment archive
 
 **AI Component:** No
 
-**Dependencies:** Recording Service, S3, TSTV Service (shared segment references)
+**Dependencies:** CDN cleanup script (`docker/cdn/cleanup.sh`), `recordings` table (`recorded_start`, `recorded_end`, `expires_at`, `deleted`), shared `hls_data` Docker volume
 
 **Technical Notes:**
-- Reference counting: master recordings track user recording count
-- Safety retention period (7 days) prevents accidental data loss if a user re-creates a recording
-- Shared segment reference check prevents deleting segments still needed by catch-up
+- Segment filenames encode wall-clock start time: `ch1-20260223143000.ts` — parse timestamp with `datetime.strptime(name, "%Y%m%d%H%M%S")`
+- Cleanup pseudocode: for each `.ts` file older than `cutv_window_hours`, query `recordings` for any row where `recorded_start ≤ seg_time ≤ recorded_end AND expires_at > now AND deleted = FALSE`. If any such row exists, skip deletion.
+- The `recordings` table is created during the TSTV implementation phase (pre-created per PRD-003 Section 7.1 v1.1 note)
 
 ---
 
@@ -821,22 +823,25 @@
 **Priority:** P1
 **Phase:** 1
 **Story Points:** L
-**PRD Reference:** Technical Section 7.4
+**PRD Reference:** Technical Section 7.4 (updated v1.1)
 
 **Acceptance Criteria:**
-- [ ] Given a channel is both catch-up-enabled and PVR-enabled, when both services need the same segments, then the same S3 segments are referenced by both (no duplication)
-- [ ] Given catch-up content expires, when a PVR user still references the segments, then the segments are retained for the PVR user
-- [ ] Given "Record from beginning" uses the start-over buffer, when the buffer content is available, then segments from EFS/S3 catch-up storage are reused for the PVR recording
+- [ ] Given a channel is both catch-up-enabled and PVR-enabled, when both services need the same segments, then the same Docker volume segments are referenced by both (no duplication)
+- [ ] Given catch-up content expires (CUTV window exceeded), when a PVR user still has an active recording (`expires_at` in the future), then the retention lock prevents deletion and the recording remains playable
+- [ ] Given "Record from beginning," when the user initiates it, then `recorded_start` is set to the program's `schedule_entry.start_time` and the manifest generator uses the shared segment archive from that timestamp
+- [ ] Given a "Record to PVR" action from catch-up browse, when the recording row is created, then `expires_at` is set to `now + 90 days`, extending retention beyond the CUTV window
 
 **AI Component:** No
 
-**Dependencies:** TSTV Service (PRD-002), Recording Service, S3 segment management
+**Dependencies:** TSTV Service (PRD-002), Recording Service, shared `hls_data` Docker volume
 
 **Technical Notes:**
-- Segment path conventions must align between catch-up and PVR storage
-- Reference counting spans both services to prevent premature deletion
+- In the PoC, "shared storage" means the same Docker volume mount (`hls_data`) accessible to both the TSTV manifest generator and the PVR manifest generator
+- PVR playback calls `get_segments_in_range(channel_key, recorded_start, recorded_end)` — the same function used by catch-up manifest generation
+- No S3 path conventions needed in PoC; production would align `s3://catch-up/` and `s3://pvr/` paths
 
 ---
 
 *End of User Stories for PRD-003: Cloud PVR*
 *Total: 30 stories (14 core functional, 5 AI enhancement, 5 non-functional, 6 technical/integration)*
+*v1.1 update (2026-02-23): Updated US-PVR-029 to reflect retention lock mechanism via `recordings.expires_at` on the shared Docker volume (replacing S3 reference counting). Updated US-PVR-030 to reflect PoC shared Docker volume approach and `get_segments_in_range()` reuse. See [tstv-implementation-plan.md](../../plans/tstv-implementation-plan.md) for implementation details.*

@@ -854,5 +854,70 @@
 
 ---
 
+## Epic 7: Admin Dashboard — Streaming Controls
+
+*Added v1.1 (2026-02-23): These stories cover the admin controls introduced in PRD-002 Section 7.7 for managing the PoC streaming infrastructure.*
+
+### US-TSTV-032: Channel SimLive Control Panel
+
+**As an** operator
+**I want to** start, stop, restart, and monitor FFmpeg streaming processes per channel from the admin dashboard
+**So that** I can manage live channel availability without needing terminal access
+
+**Priority:** P1
+**Phase:** 1
+**Story Points:** M
+**PRD Reference:** PRD-002 Section 7.7
+
+**Acceptance Criteria:**
+- [ ] Given the admin dashboard "Streaming" tab, when loaded, then a Channel Control table shows each channel with: channel key, running/stopped status, PID, uptime, segment count, and disk usage
+- [ ] Given a stopped channel, when "Start" is pressed, then the FFmpeg process starts and status updates to running within 5 seconds
+- [ ] Given a running channel, when "Stop" is pressed, then the FFmpeg process is terminated (SIGTERM) and status updates to stopped within 5 seconds
+- [ ] Given any channel, when "Restart" is pressed, then the process stops then starts cleanly
+- [ ] Given the "Run Cleanup" button, when pressed, then segments older than the channel's `catchup_window_hours` are deleted and freed disk space is shown
+- [ ] Given the header, when displayed, then total HLS volume disk usage is visible as a summary bar
+- [ ] Performance: Status endpoint responds in < 500ms
+
+**AI Component:** No
+
+**Dependencies:** Backend SimLive process manager (`backend/app/simlive_manager.py`), Admin API (`/admin/simlive/*`)
+
+**Technical Notes:**
+- Backend maintains an in-process PID registry per channel key
+- FFmpeg processes write HLS segments to the shared `hls_data` Docker volume
+- Disk usage calculated via `os.statvfs()` or `du` on the `/hls` directory
+
+---
+
+### US-TSTV-033: Per-Channel TSTV Rules Editor
+
+**As an** operator
+**I want to** configure per-channel TSTV business rules (start-over, catch-up, CUTV window) from the admin dashboard without a deployment
+**So that** I can adjust content rights settings in real time as licensing agreements change
+
+**Priority:** P1
+**Phase:** 1
+**Story Points:** S
+**PRD Reference:** PRD-002 Section 7.7, TSTV-FR-020, TSTV-FR-021
+
+**Acceptance Criteria:**
+- [ ] Given the admin dashboard "TSTV Rules" sub-panel, when loaded, then a table shows all channels with editable columns: TSTV enabled, start-over enabled, catch-up enabled, CUTV window (hours)
+- [ ] Given a toggle is changed, when saved, then the channel's database record is updated and the change takes effect on the next manifest request (no restart needed)
+- [ ] Given the CUTV window dropdown, when available options are shown, then the choices are: 2h, 6h, 12h, 24h, 48h, 72h, 168h
+- [ ] Given a channel with `tstv_enabled=FALSE`, when the EPG is viewed, then no catch-up badges or start-over prompts appear for that channel
+- [ ] Given a channel with `catchup_enabled=FALSE`, when the catch-up manifest endpoint is called, then a 403 response is returned
+- [ ] Performance: Rule update API responds in < 500ms; change reflected in frontend within 1 page reload
+
+**AI Component:** No
+
+**Dependencies:** Admin API (`/admin/tstv/rules/{channel_id}`), channels table (`tstv_enabled`, `startover_enabled`, `catchup_enabled`, `cutv_window_hours`)
+
+**Technical Notes:**
+- CUTV window change affects manifest endpoint enforcement immediately — no caching on the rule itself
+- The `catchup_window_hours` (infrastructure retention) is NOT exposed in this UI — it is set at deploy time. Only the viewer-facing `cutv_window_hours` is editable here.
+
+---
+
 *End of User Stories for PRD-002: Time-Shifted TV (Start Over & Catch-Up)*
-*Total: 28 stories (13 core functional, 7 AI enhancement, 4 non-functional, 4 technical/integration)*
+*Total: 33 stories (13 core functional, 7 AI enhancement, 4 non-functional, 4 technical/integration, 2 admin dashboard)*
+*v1.1 update (2026-02-23): Added Epic 7 (Admin Dashboard — Streaming Controls) with US-TSTV-032 and US-TSTV-033 to cover PoC streaming infrastructure management per PRD-002 Section 7.7.*

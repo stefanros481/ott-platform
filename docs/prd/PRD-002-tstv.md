@@ -2,9 +2,9 @@
 ## AI-Native OTT Streaming Platform
 
 **Document ID:** PRD-002
-**Version:** 1.0
-**Date:** 2026-02-08
-**Status:** Draft
+**Version:** 1.1
+**Date:** 2026-02-23
+**Status:** Draft — Updated for PoC implementation
 **Author:** PRD Writer A
 **References:** VIS-001 (Project Vision & Design), ARCH-001 (Platform Architecture), PRD-001 (Live TV)
 **Stakeholders:** Product Management, Engineering (Platform, Client, AI/ML), Content Operations, Content Rights, SRE
@@ -520,6 +520,96 @@ Rights Engine Query:
 
 ---
 
+### 7.5 Data Model — Channel & Schedule Entry Extensions
+
+The following columns are added to existing tables to support per-channel TSTV rules and segment time indexing.
+
+**`channels` table additions:**
+
+| Column | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `cdn_channel_key` | VARCHAR(20) | — | Maps channel to CDN path and segment directory (`ch1`, `ch2`, etc.) |
+| `tstv_enabled` | BOOLEAN | TRUE | Master switch — enables any TSTV capability for this channel |
+| `startover_enabled` | BOOLEAN | TRUE | Can users start over currently airing programs? |
+| `catchup_enabled` | BOOLEAN | TRUE | Can users access past programs (catch-up)? |
+| `catchup_window_hours` | INTEGER | 168 | **Infrastructure retention** — how long segments are kept on disk (default: 7 days). Typically the same for all channels. |
+| `cutv_window_hours` | INTEGER | 48 | **Business rule / viewer entitlement** — how long after broadcast a user may actually access catch-up. Varies per channel based on content rights (e.g., 2h for premium sports, 168h for entertainment). |
+
+**Important distinction:** `catchup_window_hours` controls infrastructure (segment cleanup cron), while `cutv_window_hours` controls viewer entitlement (manifest endpoint enforcement). The infrastructure retains segments for the maximum configured window; the API enforces the viewer's entitlement window at request time.
+
+**Example channel configurations:**
+
+| Channel | Start-over | Catch-up | CUTV window | Notes |
+|---------|-----------|----------|-------------|-------|
+| NRK1 | ✅ | ✅ | 168h (7 days) | Full TSTV rights |
+| TV 2 | ✅ | ✅ | 48h | Restricted catch-up window |
+| Discovery | ✅ | ❌ | — | Start-over only, no catch-up |
+| Eurosport | ❌ | ❌ | — | No TSTV (sports broadcast rights) |
+| National Geo | ✅ | ✅ | 72h | Medium catch-up window |
+
+**`schedule_entries` table additions:**
+
+| Column | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `catchup_eligible` | BOOLEAN | TRUE | Per-program catch-up eligibility (can override channel default) |
+| `startover_eligible` | BOOLEAN | TRUE | Per-program start-over eligibility |
+| `series_id` | VARCHAR(100) | NULL | Links episodes of the same series (used by Cloud PVR series links and auto-play next episode) |
+
+### 7.6 PoC Architecture — Segment Storage & Time Indexing
+
+The production architecture (Section 7.1–7.2) references EFS, S3, and a standalone Go manifest proxy service. The PoC implementation simplifies this to run entirely within Docker Compose with no cloud dependencies.
+
+**PoC segment storage approach:**
+- FFmpeg writes HLS segments directly to a shared Docker volume (`hls_data`)
+- Segment filenames encode wall-clock start time using `strftime`: `ch1-20260223143000.ts`
+- This eliminates the need for a separate `hls_segments` database table — timestamps are derived directly from filenames
+- A daily cron in the CDN container deletes segments older than `catchup_window_hours` (default 7 days)
+
+**PoC manifest generator:**
+- Implemented as a FastAPI router (`/tstv`) in the existing backend service
+- Reads the `/hls/{channel_key}/` directory listing to enumerate available segments
+- Parses segment timestamps from filenames to filter by time range
+- Assembles and returns HLS manifests in-process (no separate Go service required)
+
+**FFmpeg segment naming (PoC):**
+```bash
+ffmpeg -stream_loop -1 -re -i /videos/ch1.mp4 \
+  -vf "drawtext=text='CH1 %{localtime\:%Y-%m-%d %H\\\:%M\\\:%S}':..." \
+  -f hls -hls_time 6 -hls_list_size 30 \
+  -hls_flags program_date_time+append_list \
+  -hls_segment_filename '/hls/ch1/ch1-%Y%m%d%H%M%S.ts' \
+  -strftime 1 /hls/ch1/live.m3u8
+```
+
+**Performance note (PoC):** With 5 channels × 7 days × 6-second segments, each channel directory holds ~100K `.ts` files. A directory listing + filename parse takes <50ms on Linux SSD — acceptable for a PoC. Production would use the segment index database described in Section 7.1.
+
+### 7.7 Admin Dashboard — TSTV Controls
+
+The admin dashboard (frontend-admin) gains a "Streaming" section with two sub-panels:
+
+**Channel Control (SimLive Management):**
+Operators can start, stop, and monitor FFmpeg streaming processes per channel. The backend maintains an in-process registry of running FFmpeg PIDs.
+
+| Admin Endpoint | Method | Description |
+|----------------|--------|-------------|
+| `/admin/simlive/status` | GET | All channels: running/stopped, PID, uptime, segment count, disk usage |
+| `/admin/simlive/{channel_key}/start` | POST | Start FFmpeg process for channel |
+| `/admin/simlive/{channel_key}/stop` | POST | Stop FFmpeg process (SIGTERM) |
+| `/admin/simlive/{channel_key}/restart` | POST | Stop + start |
+| `/admin/simlive/cleanup` | POST | Delete segments older than retention window |
+
+**TSTV Rules Editor:**
+Operators can update per-channel TSTV business rules without a deployment. Changes take effect on the next manifest request.
+
+| Admin Endpoint | Method | Description |
+|----------------|--------|-------------|
+| `/admin/tstv/rules` | GET | List all channels with TSTV rules |
+| `/admin/tstv/rules/{channel_id}` | PUT | Update: `tstv_enabled`, `startover_enabled`, `catchup_enabled`, `cutv_window_hours` |
+
+Admin UI shows a table with toggles and a CUTV window dropdown (2h / 6h / 12h / 24h / 48h / 72h / 168h) per channel.
+
+---
+
 ## 8. Dependencies
 
 ### 8.1 Service Dependencies
@@ -594,3 +684,5 @@ Rights Engine Query:
 ---
 
 *This PRD defines the Time-Shifted TV (Start Over and Catch-Up) services for the AI-native OTT streaming platform. It should be read alongside PRD-001 (Live TV) for the live channel delivery that TSTV extends, PRD-003 (Cloud PVR) for the complementary personal recording service, PRD-005 (EPG) for program metadata and schedule data, and PRD-007 (AI User Experience) for cross-service AI capabilities including personalized recommendations and smart notifications.*
+
+*v1.1 update (2026-02-23): Added Section 7.5 (data model extensions for per-channel TSTV rules), Section 7.6 (PoC architecture — segment storage and time indexing via strftime filenames), and Section 7.7 (admin dashboard TSTV controls). The production architecture in Sections 7.1–7.4 is preserved as the long-term target. See [tstv-implementation-plan.md](../../plans/tstv-implementation-plan.md) for the PoC implementation guide.*
