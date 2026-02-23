@@ -157,3 +157,9 @@ curl -X POST "http://localhost:8000/api/v1/admin/embeddings/generate?regenerate=
 ├── docs/                    # Design docs, PRDs, architecture, user stories
 └── specs/                   # Per-feature specs and validation quickstarts
 ```
+
+## License
+
+Copyright 2026 Stefan Rosander
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

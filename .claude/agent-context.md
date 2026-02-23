@@ -21,6 +21,8 @@
 - In-memory React state only (session-scoped history); no localStorage, no DB (013-admin-analytics-ui)
 - Python 3.12 (backend), TypeScript 5+ / React 18 (frontend-admin) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, Tailwind CSS 3+ (014-nordic-currencies)
 - PostgreSQL 16 — `content_packages` and `title_offers` tables (existing schema, no migration) (014-nordic-currencies)
+- Python 3.12, TypeScript 5.6, Node.js (current LTS) + No new dependencies — this is a compliance/metadata feature (015-apache-license)
+- N/A — no database changes (015-apache-license)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

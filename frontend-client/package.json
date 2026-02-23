@@ -2,6 +2,7 @@
   "name": "ott-frontend-client",
   "private": true,
   "version": "2026.02.1",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
