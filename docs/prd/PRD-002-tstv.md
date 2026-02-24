@@ -2,8 +2,8 @@
 ## AI-Native OTT Streaming Platform
 
 **Document ID:** PRD-002
-**Version:** 1.1
-**Date:** 2026-02-23
+**Version:** 1.2
+**Date:** 2026-02-24
 **Status:** Draft — Updated for PoC implementation
 **Author:** PRD Writer A
 **References:** VIS-001 (Project Vision & Design), ARCH-001 (Platform Architecture), PRD-001 (Live TV)
@@ -555,6 +555,53 @@ The following columns are added to existing tables to support per-channel TSTV r
 | `startover_eligible` | BOOLEAN | TRUE | Per-program start-over eligibility |
 | `series_id` | VARCHAR(100) | NULL | Links episodes of the same series (used by Cloud PVR series links and auto-play next episode) |
 
+**New `tstv_sessions` table (PoC analytics):**
+
+```sql
+CREATE TABLE tstv_sessions (
+    id                SERIAL PRIMARY KEY,
+    user_id           INTEGER REFERENCES users(id),
+    profile_id        INTEGER REFERENCES profiles(id),
+    channel_id        VARCHAR(20),
+    schedule_entry_id INTEGER REFERENCES schedule_entries(id),
+    session_type      VARCHAR(20) CHECK (session_type IN ('startover', 'catchup')),
+    started_at        TIMESTAMPTZ DEFAULT NOW(),
+    last_position_s   FLOAT DEFAULT 0,
+    completed         BOOLEAN DEFAULT FALSE
+);
+```
+
+**`recordings` table (Cloud PVR stub — no new infrastructure required):**
+
+```sql
+CREATE TABLE recordings (
+    id                SERIAL PRIMARY KEY,
+    user_id           INTEGER REFERENCES users(id),
+    schedule_entry_id INTEGER REFERENCES schedule_entries(id),
+    channel_id        VARCHAR(20),
+    requested_at      TIMESTAMPTZ DEFAULT NOW(),
+    status            VARCHAR(20) DEFAULT 'completed'
+);
+```
+
+The `recordings` table is a metadata-only stub. Because segments are already persisted in the shared archive, a PVR recording is simply a pointer to a time range — no segment copying or additional infrastructure required. The TSTV catch-up manifest generator is reused as-is for PVR playback.
+
+**`drm_keys` table (added by DRM plan — see Section 7.8):**
+
+```sql
+CREATE TABLE drm_keys (
+    id          SERIAL PRIMARY KEY,
+    key_id      UUID NOT NULL UNIQUE,
+    key_value   BYTEA NOT NULL,
+    channel_id  INTEGER REFERENCES channels(id),
+    content_id  INTEGER,
+    active      BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    rotated_at  TIMESTAMPTZ,
+    expires_at  TIMESTAMPTZ
+);
+```
+
 ### 7.6 PoC Architecture — Segment Storage & Time Indexing
 
 The production architecture (Section 7.1–7.2) references EFS, S3, and a standalone Go manifest proxy service. The PoC implementation simplifies this to run entirely within Docker Compose with no cloud dependencies.
@@ -571,17 +618,82 @@ The production architecture (Section 7.1–7.2) references EFS, S3, and a standa
 - Parses segment timestamps from filenames to filter by time range
 - Assembles and returns HLS manifests in-process (no separate Go service required)
 
-**FFmpeg segment naming (PoC):**
-```bash
-ffmpeg -stream_loop -1 -re -i /videos/ch1.mp4 \
-  -vf "drawtext=text='CH1 %{localtime\:%Y-%m-%d %H\\\:%M\\\:%S}':..." \
-  -f hls -hls_time 6 -hls_list_size 30 \
-  -hls_flags program_date_time+append_list \
-  -hls_segment_filename '/hls/ch1/ch1-%Y%m%d%H%M%S.ts' \
-  -strftime 1 /hls/ch1/live.m3u8
+**Docker Compose services (PoC):**
+
+```yaml
+services:
+  simlive:               # FFmpeg ingest + HLS packaging (one process per channel)
+    build: ./docker/simlive
+    volumes:
+      - hls_data:/hls
+    depends_on: [cdn]
+
+  cdn:                   # nginx — direct-serves segments from shared volume
+    build: ./docker/cdn
+    volumes:
+      - hls_data:/hls
+    ports:
+      - "8088:80"
+
+  backend:               # FastAPI — mounts hls_data read-only for manifest generation
+    volumes:
+      - hls_data:/hls:ro
+
+volumes:
+  hls_data:
 ```
 
-**Performance note (PoC):** With 5 channels × 7 days × 6-second segments, each channel directory holds ~100K `.ts` files. A directory listing + filename parse takes <50ms on Linux SSD — acceptable for a PoC. Production would use the segment index database described in Section 7.1.
+**FFmpeg command per channel (PoC — encrypted fMP4):**
+
+```bash
+ffmpeg -stream_loop -1 -re -i /videos/channel1.mp4 \
+  -vf "drawtext=text='CH1 %{localtime\:%Y-%m-%d %H\\\:%M\\\:%S}':fontsize=48:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=10:y=10" \
+  -c:v libx264 -preset ultrafast -tune zerolatency -b:v 4M \
+  -c:a aac -b:a 128k \
+  -f hls \
+  -hls_time 6 \
+  -hls_list_size 30 \
+  -hls_flags program_date_time+append_list \
+  -hls_segment_type fmp4 \
+  -hls_fmp4_init_filename 'ch1-init.mp4' \
+  -hls_segment_filename '/hls/ch1/ch1-%Y%m%d%H%M%S.m4s' \
+  -strftime 1 \
+  -encryption_scheme cenc-aes-ctr \
+  -encryption_key ${KEY_HEX} \
+  -encryption_kid ${KEY_ID_HEX} \
+  /hls/ch1/live.m3u8
+```
+
+**Segment format:** fMP4 (`.m4s`) with CENC AES-128-CTR encryption. The init segment (`ch1-init.mp4`) is written once per channel and contains the PSSH box and codec configuration. The `KEY_HEX` and `KEY_ID_HEX` are fetched from the Key Management Service at SimLive startup. See Section 7.8 for the DRM architecture.
+
+**Key FFmpeg flags:**
+
+| Flag | Purpose |
+|------|---------|
+| `-stream_loop -1` | Loop video indefinitely |
+| `-re` | Real-time playback speed |
+| `-vf drawtext=...` | Burns wall-clock time into video for time-shift verification |
+| `-preset ultrafast` | Minimize CPU (required because drawtext prevents `-c:v copy`) |
+| `-hls_time 6` | 6-second segments |
+| `-hls_list_size 30` | Live manifest shows last 30 segments (3-minute live window) |
+| `-hls_flags program_date_time` | Injects `#EXT-X-PROGRAM-DATE-TIME` per segment |
+| `-hls_segment_type fmp4` | fMP4 output — required for CENC encryption |
+| `-hls_fmp4_init_filename` | Init segment with codec parameters and PSSH box |
+| `-strftime 1` | Enables `%Y%m%d%H%M%S` in segment filenames |
+| `-encryption_scheme cenc-aes-ctr` | CENC (Common Encryption) — same scheme as Widevine/FairPlay |
+
+**TSTV API endpoints (PoC):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/tstv/channels` | GET | List channels with TSTV eligibility flags |
+| `/tstv/startover/{channel_id}` | GET | Live stream URL + start-over availability for current program |
+| `/tstv/startover/{channel_id}/manifest` | GET | Start-over EVENT manifest (`?schedule_entry_id=N`) |
+| `/tstv/catchup/{channel_id}` | GET | List catch-up programs for channel (past 7 days, eligible only) |
+| `/tstv/catchup/{channel_id}/manifest` | GET | Catch-up VOD manifest (`?schedule_entry_id=N`) |
+| `/tstv/sessions` | POST | Record TSTV session start/position for analytics |
+
+**Performance note (PoC):** With 5 channels × 7 days × 6-second segments, each channel directory holds ~100K `.m4s` files. A directory listing + filename parse takes <50ms on Linux SSD — acceptable for a PoC. Production would use the segment index database described in Section 7.1.
 
 ### 7.7 Admin Dashboard — TSTV Controls
 
@@ -607,6 +719,88 @@ Operators can update per-channel TSTV business rules without a deployment. Chang
 | `/admin/tstv/rules/{channel_id}` | PUT | Update: `tstv_enabled`, `startover_enabled`, `catchup_enabled`, `cutv_window_hours` |
 
 Admin UI shows a table with toggles and a CUTV window dropdown (2h / 6h / 12h / 24h / 48h / 72h / 168h) per channel.
+
+**DRM Management panel:**
+Operators can inspect encryption keys, trigger key rotation, and monitor license activity.
+
+| Admin Endpoint | Method | Description |
+|----------------|--------|-------------|
+| `/admin/drm/keys` | GET | List all keys: channel, KID (truncated), active/rotated status, created date |
+| `/admin/drm/keys/channel/{id}/rotate` | POST | Rotate encryption key for channel (deactivates current, generates new, restarts SimLive) |
+| `/admin/drm/license-stats` | GET | License request counts: granted vs denied, broken down by channel and denial reason |
+
+Admin UI shows a key overview table per channel with a "Rotate Key" button (with confirmation) and a license request dashboard showing success/failure rates.
+
+**Subscription Management panel:**
+Operators can manage user subscriptions and product entitlements for testing.
+
+| Admin Endpoint | Method | Description |
+|----------------|--------|-------------|
+| `/admin/subscriptions` | GET | List all users with their active subscriptions and entitled channels |
+| `/admin/subscriptions` | POST | Create subscription for a user |
+| `/admin/subscriptions/{id}` | PUT | Modify subscription status (activate, suspend, cancel) |
+| `/admin/products` | GET | List products with channel entitlements |
+| `/admin/products/{id}` | PUT | Modify product (price, included channels, active status) |
+
+Admin UI shows a user table with subscription status and per-channel entitlement indicators. Quick actions allow adding/removing subscriptions for test users.
+
+### 7.8 PoC DRM Architecture — ClearKey + CENC
+
+The production architecture (Sections 7.1–7.4) references Widevine + FairPlay via CPIX. The PoC implements ClearKey — a W3C standard that is architecturally identical to production DRM but requires no commercial CDM licenses.
+
+**What ClearKey demonstrates:**
+- CENC (Common Encryption) on HLS fMP4 segments — the same encryption scheme used by Widevine and FairPlay
+- EME (Encrypted Media Extensions) in the browser — the same browser API used by all production DRM systems
+- A license server with authentication and entitlement-gated key delivery
+- Per-channel encryption keys with rotation support
+- The full chain: subscription → entitlement → license → decryption key → playback
+
+**What ClearKey does NOT provide:** hardware-backed key protection, secure video path, or content owner certification. The PoC demonstrates the architecture and business logic; replacing ClearKey with Widevine/FairPlay in production is a license server and player configuration change, not an architectural change.
+
+**DRM flow:**
+
+```
+SimLive (FFmpeg)
+  → POST /drm/keys/channel/{ch}  →  Key Management Service
+  ← { key_id_hex, key_hex }      ←  (generates + stores AES-128 key in drm_keys table)
+
+FFmpeg encrypts segments with CENC AES-128-CTR → writes to shared volume
+CDN serves encrypted .m4s segments
+
+Player (hls.js + EME):
+  1. Loads manifest → detects #EXT-X-KEY tag
+  2. EME: creates MediaKeySession, sends license request
+  3. POST /drm/license  (Authorization: Bearer <jwt>)
+     Body: { "kids": ["base64url-key-id"], "type": "temporary" }
+  4. License server: validates JWT → decodes KID → checks entitlement
+     If entitled: returns { "keys": [{ "kty": "oct", "kid": "...", "k": "..." }] }
+     If not entitled: returns 403 + available_products (upsell data)
+  5. Browser decrypts and renders video
+```
+
+**Entitlement enforcement is layered — DRM is the definitive check:**
+
+| Enforcement point | Failure response | Purpose |
+|-------------------|-----------------|---------|
+| Channel list API | Channel shown as locked | UI — indicates subscription needed |
+| TSTV manifest request | 403 + upsell products | No manifest returned |
+| EPG catch-up click | Redirect to upsell | Prevents player load |
+| **DRM license request** | **403 + upsell products** | **Hard block — content cannot be decrypted even if API checks are bypassed** |
+
+**Key rotation:** When a key is rotated, the old key remains in `drm_keys` (marked `active=False`). License requests for catch-up/PVR content encrypted with the old key are still resolved by KID lookup — old content remains playable. New segments use the new key. This mirrors how production DRM handles key rotation over long content windows.
+
+**Production migration path:**
+
+| Component | ClearKey (PoC) | Production |
+|-----------|---------------|------------|
+| Encryption | CENC AES-128-CTR | CENC AES-128-CTR (same) |
+| Segment format | fMP4 (same) | fMP4 (same) |
+| Key management | Self-hosted FastAPI | DRM vendor (Axinom, BuyDRM, PallyCon) or self-hosted |
+| License server | ClearKey JSON protocol | Widevine license proxy + FairPlay KSM |
+| Player | Shaka Player 4.12 EME + ClearKey | Shaka Player with Widevine/FairPlay CDM (same player, DRM config change only) |
+| Entitlement check | Same logic | Same logic (vendor callback or proxy) |
+
+The entitlement model, key storage, segment archive, and manifest generation are all reusable without change.
 
 ---
 
@@ -686,3 +880,5 @@ Admin UI shows a table with toggles and a CUTV window dropdown (2h / 6h / 12h / 
 *This PRD defines the Time-Shifted TV (Start Over and Catch-Up) services for the AI-native OTT streaming platform. It should be read alongside PRD-001 (Live TV) for the live channel delivery that TSTV extends, PRD-003 (Cloud PVR) for the complementary personal recording service, PRD-005 (EPG) for program metadata and schedule data, and PRD-007 (AI User Experience) for cross-service AI capabilities including personalized recommendations and smart notifications.*
 
 *v1.1 update (2026-02-23): Added Section 7.5 (data model extensions for per-channel TSTV rules), Section 7.6 (PoC architecture — segment storage and time indexing via strftime filenames), and Section 7.7 (admin dashboard TSTV controls). The production architecture in Sections 7.1–7.4 is preserved as the long-term target. See [tstv-implementation-plan.md](../../plans/tstv-implementation-plan.md) for the PoC implementation guide.*
+
+*v1.2 update (2026-02-24): Updated Section 7.5 to add `tstv_sessions`, `recordings` (PVR stub), and `drm_keys` tables. Updated Section 7.6 to reflect the SimLive container naming, fMP4/CENC segment format (`.m4s`), full FFmpeg command with encryption flags, Docker Compose service layout, and TSTV API endpoint table. Updated Section 7.7 to add DRM Management and Subscription Management admin panels. Added Section 7.8 (PoC DRM architecture — ClearKey + CENC, license flow, entitlement enforcement chain, and production migration path). See [drm-implementation-plan.md](../../plans/drm-implementation-plan.md) and [tstv-implementation-plan-v2.md](../../plans/tstv-implementation-plan-v2.md) for implementation details.*
