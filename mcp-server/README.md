@@ -19,7 +19,7 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` with your local database credentials:
+Edit `.env` with your local database credentials. Use the settings below to work with the playground:
 
 ```env
 # Async PostgreSQL connection string (asyncpg driver required)
