@@ -40,7 +40,7 @@ Rich, realistic seed data (50-100 titles, 20-30 channels, 7-day EPG schedule) is
 
 - No `version` key at the top of docker-compose files
 - Use `uv` for all Python dependency management
-- Mock HLS content via public test streams (no encoding pipeline)
+- HLS content via SimLive (FFmpeg subprocess writing fMP4/CENC segments to a shared volume) or public test streams; no cloud encoding pipeline
 - Single FastAPI process (not microservices)
 - No cloud provider dependencies (everything runs locally)
 - Frontend uses Vite dev server in development (not production builds)

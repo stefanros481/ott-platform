@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # AI / Embeddings
     embedding_model: str = "all-MiniLM-L6-v2"
 
+    # HLS / SimLive
+    hls_segment_dir: str = "/hls_data"
+    hls_sources_dir: str = "/hls_sources"
+    hls_segment_duration: int = 6
+    cdn_base_url: str = "http://localhost:8081"
+
+    # DRM
+    drm_enabled: bool = True
+
     # Logging
     log_level: str = "INFO"
 

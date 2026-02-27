@@ -5,10 +5,12 @@ import { useAuth } from '../context/AuthContext'
 import { getFeatured } from '../api/catalog'
 import { getHomeRecommendations } from '../api/recommendations'
 import { getContinueWatching, getPausedBookmarks, dismissBookmark } from '../api/viewing'
+import { listCatchUpByDate } from '../api/tstv'
 import HeroBanner from '../components/HeroBanner'
 import ContentRail from '../components/ContentRail'
 import TitleCard from '../components/TitleCard'
 import ContinueWatchingCard from '../components/ContinueWatchingCard'
+import CatchUpRail from '../components/CatchUpRail'
 
 function detectDeviceType(): string {
   const ua = navigator.userAgent
@@ -46,6 +48,16 @@ export default function HomePage() {
   const { data: pausedBookmarks } = useQuery({
     queryKey: ['pausedBookmarks', profile?.id],
     queryFn: () => getPausedBookmarks(profile!.id),
+    enabled: !!profile,
+  })
+
+  // Catch-Up Continue Watching — programs with saved bookmarks
+  const { data: catchupContinue } = useQuery({
+    queryKey: ['catchupContinue', profile?.id],
+    queryFn: async () => {
+      const result = await listCatchUpByDate(undefined, undefined, undefined, 50, 0, profile!.id)
+      return result.programs.filter(p => p.bookmark_position_seconds != null && p.bookmark_position_seconds > 0)
+    },
     enabled: !!profile,
   })
 
@@ -118,6 +130,13 @@ export default function HomePage() {
               </div>
             )}
           </div>
+        )}
+
+        {/* Catch-Up Continue Watching Rail */}
+        {catchupContinue && catchupContinue.length > 0 && (
+          <ContentRail title="Continue Watching — Catch-Up TV">
+            <CatchUpRail programs={catchupContinue} />
+          </ContentRail>
         )}
 
         {recsLoading ? (

@@ -32,6 +32,10 @@ plans/
 # Playwright
 .playwright-mcp/
 
+# HLS media files (TSTV)
+backend/hls_sources/
+hls_data/
+
 # Logs & temp
 *.log
 *.sqlite

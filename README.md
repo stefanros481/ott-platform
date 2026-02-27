@@ -23,6 +23,10 @@ New features are developed using [speckit](https://github.com/speckit-ai/speckit
 | ![Profile Select](assets/profile-select.png) | ![Admin Dashboard](assets/admin-dashboard.png) |
 | *Profile selector — multi-profile per account* | *Admin dashboard — catalog, channels, users, embeddings, analytics* |
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for completed features, what's planned next, and overall coverage.
+
 ## What You'll Find Here
 
 - A fully runnable backend (FastAPI + PostgreSQL + Redis) and two React frontends

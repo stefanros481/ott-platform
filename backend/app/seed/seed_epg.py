@@ -280,6 +280,8 @@ def _build_day_schedule(
             series_title=prog["series_title"],
             season_number=season_num,
             episode_number=episode_num,
+            catchup_eligible=True,
+            startover_eligible=True,
         ))
 
         current_time = end_time
@@ -458,13 +460,13 @@ async def seed_epg(session: AsyncSession) -> dict[str, int]:
     print(f"  [seed_epg] Created {len(CHANNELS)} channels.")
 
     # ------------------------------------------------------------------
-    # 2. Generate 7-day schedule (today - 3 days to today + 3 days)
+    # 2. Generate 14-day schedule (today - 7 days to today + 7 days)
     # ------------------------------------------------------------------
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    start_day = today - timedelta(days=3)
+    start_day = today - timedelta(days=7)
     total_entries = 0
 
-    for day_offset in range(7):
+    for day_offset in range(14):
         day = start_day + timedelta(days=day_offset)
         for ch_idx in range(len(CHANNELS)):
             entries = _build_day_schedule(
@@ -480,7 +482,7 @@ async def seed_epg(session: AsyncSession) -> dict[str, int]:
         # Flush each day to avoid huge pending state
         await session.flush()
 
-    print(f"  [seed_epg] Created {total_entries} schedule entries across 7 days.")
+    print(f"  [seed_epg] Created {total_entries} schedule entries across 14 days.")
 
     await session.commit()
 

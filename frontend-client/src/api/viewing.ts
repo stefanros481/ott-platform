@@ -58,7 +58,7 @@ export interface WatchlistItem {
 }
 
 export interface BookmarkPayload {
-  content_type: 'movie' | 'episode'
+  content_type: 'movie' | 'episode' | 'tstv_catchup' | 'tstv_startover'
   content_id: string
   position_seconds: number
   duration_seconds: number

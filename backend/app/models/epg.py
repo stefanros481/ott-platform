@@ -20,6 +20,14 @@ class Channel(Base):
     hls_live_url: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # TSTV fields (Feature 016)
+    cdn_channel_key: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    tstv_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    startover_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    catchup_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    catchup_window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=168, server_default="168")
+    cutv_window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=168, server_default="168")
+
     schedule_entries: Mapped[list["ScheduleEntry"]] = relationship(back_populates="channel")
 
 
@@ -42,6 +50,11 @@ class ScheduleEntry(Base):
     series_title: Mapped[str | None] = mapped_column(String(200))
     season_number: Mapped[int | None] = mapped_column(Integer)
     episode_number: Mapped[int | None] = mapped_column(Integer)
+
+    # TSTV fields (Feature 016)
+    catchup_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    startover_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    series_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     channel: Mapped["Channel"] = relationship(back_populates="schedule_entries")
 

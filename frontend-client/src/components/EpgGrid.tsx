@@ -141,6 +141,8 @@ export default function EpgGrid({ channels, scheduleData, currentTime, onProgram
                     const width = ((end.getTime() - start.getTime()) / 3600000) * HOUR_WIDTH
 
                     const isLive = currentTime >= start && currentTime <= end
+                    const isPast = currentTime > end
+                    const hasCatchup = isPast && entry.catchup_eligible
 
                     return (
                       <button
@@ -148,7 +150,9 @@ export default function EpgGrid({ channels, scheduleData, currentTime, onProgram
                         className={`absolute top-1 bottom-1 rounded px-2 flex items-center overflow-hidden text-left transition-colors ${
                           isLive
                             ? 'bg-primary-500/20 border border-primary-500/50 hover:bg-primary-500/30'
-                            : 'bg-surface-overlay hover:bg-white/10 border border-white/5'
+                            : hasCatchup
+                              ? 'bg-surface-overlay hover:bg-primary-500/10 border border-primary-500/20'
+                              : 'bg-surface-overlay hover:bg-white/10 border border-white/5'
                         }`}
                         style={{ left, width: Math.max(width - 2, 40) }}
                         onClick={() => {
@@ -165,6 +169,16 @@ export default function EpgGrid({ channels, scheduleData, currentTime, onProgram
                         </div>
                         {isLive && (
                           <span className="flex-shrink-0 ml-1 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        )}
+                        {isPast && hasCatchup && (
+                          <svg className="flex-shrink-0 ml-1 w-3.5 h-3.5 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+                          </svg>
+                        )}
+                        {isPast && !hasCatchup && (
+                          <svg className="flex-shrink-0 ml-1 w-3.5 h-3.5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                          </svg>
                         )}
                       </button>
                     )

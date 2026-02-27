@@ -22,6 +22,8 @@ export interface ScheduleEntry {
   is_replayable: boolean
   age_rating: string
   thumbnail_url: string | null
+  catchup_eligible: boolean
+  startover_eligible: boolean
 }
 
 export interface NowPlaying {

@@ -5,27 +5,32 @@ interface VideoPlayerProps {
   manifestUrl: string
   title: string
   isLive?: boolean
+  clearKeys?: Record<string, string>
   onPositionUpdate?: (positionSeconds: number) => void
   onDurationChange?: (durationSeconds: number) => void
   onPlayStateChange?: (playing: boolean) => void
   startPosition?: number
   onEnded?: () => void
   onBack?: () => void
+  onStartOver?: () => void
 }
 
 export default function VideoPlayer({
   manifestUrl,
   title,
   isLive = false,
+  clearKeys,
   onPositionUpdate,
   onDurationChange: onDurationChangeProp,
   onPlayStateChange,
   startPosition,
   onEnded,
   onBack,
+  onStartOver,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<shaka.Player | null>(null)
+  const attachPromiseRef = useRef<Promise<void>>(Promise.resolve())
   const positionTimerRef = useRef<ReturnType<typeof setInterval>>()
   const onPositionUpdateRef = useRef(onPositionUpdate)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -56,7 +61,9 @@ export default function VideoPlayer({
     onPositionUpdateRef.current = onPositionUpdate
   }, [onPositionUpdate])
 
-  // Initialize Shaka Player
+  // Create Shaka Player once on mount, destroy on unmount.
+  // This avoids the race condition where async destroy() on the old player
+  // hasn't released the <video> element before a new player tries to attach.
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -70,34 +77,76 @@ export default function VideoPlayer({
     const player = new shaka.Player()
     playerRef.current = player
 
-    const initPlayer = async () => {
+    // Store the attach promise so the load effect can wait for it
+    attachPromiseRef.current = (async () => {
+      await player.attach(video)
+
+      // Attach JWT token to requests aimed at our API (manifest + DRM license)
+      const apiBase = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8000/api/v1'
+      const apiOrigin = new URL(apiBase).origin
+      player.getNetworkingEngine()?.registerRequestFilter((_type, request) => {
+        if (request.uris.some(uri => uri.startsWith(apiOrigin))) {
+          const token = localStorage.getItem('token')
+          if (token) {
+            request.headers['Authorization'] = `Bearer ${token}`
+          }
+        }
+      })
+    })()
+
+    return () => {
+      // Save final position before destroying the player
+      if (video && onPositionUpdateRef.current) onPositionUpdateRef.current(Math.floor(video.currentTime))
+      if (positionTimerRef.current) clearInterval(positionTimerRef.current)
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
+      playerRef.current = null
+      player.destroy()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Load manifest when URL or DRM config changes.
+  // Reuses the persistent player instance — no destroy/create cycle.
+  useEffect(() => {
+    if (!manifestUrl) return
+    let cancelled = false
+
+    const loadManifest = async () => {
+      // Wait for player to be attached to the video element
+      await attachPromiseRef.current
+      const player = playerRef.current
+      const video = videoRef.current
+      if (!player || !video || cancelled) return
+
+      // Configure ClearKey DRM via direct key map (or clear it for live mode)
+      player.configure({
+        drm: clearKeys && Object.keys(clearKeys).length > 0
+          ? { clearKeys }
+          : { clearKeys: {} },
+      })
+
       try {
-        await player.attach(video)
         await player.load(manifestUrl)
+        if (cancelled) return
         if (!isLive && startPosition && startPosition > 0) {
           video.currentTime = startPosition
         }
         video.play().catch(() => {})
       } catch (e) {
+        if (cancelled) return
         const shakaError = e as shaka.util.Error
         if (shakaError.code === shaka.util.Error.Code.LOAD_INTERRUPTED) return
         if (shakaError.severity === shaka.util.Error.Severity.CRITICAL) {
-          setError(`Playback error: ${shakaError.message}`)
+          setError(`Playback error: Shaka Error ${shakaError.code}`)
         }
       }
     }
 
-    initPlayer()
+    loadManifest()
 
-    return () => {
-      // Save final position before destroying the player — use ref to avoid stale closure
-      if (video && onPositionUpdateRef.current) onPositionUpdateRef.current(Math.floor(video.currentTime))
-      if (positionTimerRef.current) clearInterval(positionTimerRef.current)
-      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
-      player.destroy()
-    }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestUrl])
+  }, [manifestUrl, clearKeys])
 
   // Position reporting
   useEffect(() => {
@@ -364,7 +413,7 @@ export default function VideoPlayer({
               </button>
 
               {/* Start Over */}
-              <button onClick={startOver} className="text-white hover:text-primary-400 transition-colors" title="Start over">
+              <button onClick={onStartOver ?? startOver} className="text-white hover:text-primary-400 transition-colors" title="Start over">
                 <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5" />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 9c1.5-3.5 5-6 9-6 5.523 0 10 4.477 10 10s-4.477 10-10 10c-4.5 0-8.27-2.943-9.543-7" />

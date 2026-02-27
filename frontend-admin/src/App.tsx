@@ -10,6 +10,7 @@ import ScheduleEditPage from '@/pages/ScheduleEditPage'
 import UserListPage from '@/pages/UserListPage'
 import PackagesPage from '@/pages/PackagesPage'
 import AnalyticsPage from '@/pages/AnalyticsPage'
+import StreamingPage from '@/pages/StreamingPage'
 
 function AuthGuard() {
   const { isAuthenticated, isAdmin } = useAuth()
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/schedule" element={<ScheduleEditPage />} />
         <Route path="/users" element={<UserListPage />} />
         <Route path="/packages" element={<PackagesPage />} />
+        <Route path="/streaming" element={<StreamingPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
       </Route>
 

@@ -40,6 +40,8 @@ class ScheduleEntryResponse(BaseModel):
     series_title: str | None = None
     season_number: int | None = None
     episode_number: int | None = None
+    catchup_eligible: bool = False
+    startover_eligible: bool = False
 
     model_config = {"from_attributes": True}
 

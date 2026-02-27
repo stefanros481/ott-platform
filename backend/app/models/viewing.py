@@ -11,7 +11,7 @@ from app.database import Base
 class Bookmark(Base):
     __tablename__ = "bookmarks"
     __table_args__ = (
-        UniqueConstraint("profile_id", "content_id", name="uq_bookmark_profile_content"),
+        UniqueConstraint("profile_id", "content_id", "content_type", name="uq_bookmark_profile_content_type"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
