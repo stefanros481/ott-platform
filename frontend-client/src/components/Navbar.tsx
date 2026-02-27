@@ -1,6 +1,7 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
+import NotificationBell from './NotificationBell'
 
 export default function Navbar() {
   const { profile, logout } = useAuth()
@@ -37,11 +38,13 @@ export default function Navbar() {
             <NavLink to="/" end className={linkClass}>Home</NavLink>
             <NavLink to="/browse" className={linkClass}>Browse</NavLink>
             <NavLink to="/epg" className={linkClass}>EPG</NavLink>
+            <NavLink to="/catchup" className={linkClass}>Catch-Up</NavLink>
             <NavLink to="/watchlist" className={linkClass}>My List</NavLink>
           </div>
 
-          {/* Right: Search, Profile, Logout */}
+          {/* Right: Notifications, Search, Profile, Logout */}
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <Link
               to="/search"
               className="p-2 text-gray-400 hover:text-white transition-colors"

@@ -43,6 +43,10 @@ async def upsert_bookmark(
         or (duration_seconds - position_seconds) <= COMPLETION_REMAINING_SECONDS
     )
 
+    # TSTV content types use furthest-position-wins to handle concurrent writes
+    tstv_types = ("tstv_catchup", "tstv_startover")
+    use_furthest_position = content_type in tstv_types
+
     if bookmark is None:
         bookmark = Bookmark(
             profile_id=profile_id,
@@ -54,7 +58,10 @@ async def upsert_bookmark(
         )
         db.add(bookmark)
     else:
-        bookmark.position_seconds = position_seconds
+        if use_furthest_position:
+            bookmark.position_seconds = max(bookmark.position_seconds, position_seconds)
+        else:
+            bookmark.position_seconds = position_seconds
         bookmark.duration_seconds = duration_seconds
         bookmark.completed = completed
         # Clear dismissed_at if user actively resumes

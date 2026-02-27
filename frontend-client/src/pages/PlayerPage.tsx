@@ -5,11 +5,14 @@ import { useAuth } from '../context/AuthContext'
 import { getTitleById } from '../api/catalog'
 import { getBookmarkByContent, createStreamSession, heartbeatSession, stopSession, listActiveSessions } from '../api/viewing'
 import { type Channel, type ScheduleEntry, getSchedule } from '../api/epg'
+import { getStartOverAvailability, getStartOverManifestUrl, getCatchUpManifestUrl, getClearKeys } from '../api/tstv'
 import { useBookmarkSync } from '../hooks/useBookmarkSync'
 import { useViewingTime, useHeartbeat } from '../hooks/useViewingTime'
 import { useAnalytics } from '../hooks/useAnalytics'
 import LockScreen from '../components/LockScreen'
 import ViewingTimeWarning from '../components/ViewingTimeWarning'
+import StartOverToast from '../components/StartOverToast'
+import ResumeToast from '../components/ResumeToast'
 import VideoPlayer from '../components/VideoPlayer'
 
 function formatTime(seconds: number): string {
@@ -41,11 +44,35 @@ export default function PlayerPage() {
 
   // Live TV state — channel from route state, program can update on transition
   const isLive = type === 'live'
-  const routeState = location.state as { channel?: Channel; currentProgram?: ScheduleEntry } | null
+  const routeState = location.state as { channel?: Channel; currentProgram?: ScheduleEntry; catchupMode?: boolean; scheduleEntryId?: string; channelId?: string } | null
   const liveChannel = isLive ? routeState?.channel ?? null : null
   const [liveProgram, setLiveProgram] = useState<ScheduleEntry | null>(routeState?.currentProgram ?? null)
   const liveProgramRef = useRef(liveProgram)
   liveProgramRef.current = liveProgram
+
+  // TSTV Start Over state (Feature 016)
+  type PlayerMode = 'live' | 'startover' | 'catchup'
+  const [playerMode, setPlayerMode] = useState<PlayerMode>('live')
+  const [showStartOverToast, setShowStartOverToast] = useState(false)
+  const [startOverEntry, setStartOverEntry] = useState<{ id: string; title: string; elapsed: number } | null>(null)
+  const [startOverManifestUrl, setStartOverManifestUrl] = useState<string | null>(null)
+  const dismissedStartOverRef = useRef<Set<string>>(new Set()) // Track dismissed prompts per session (FR-003)
+  const [showResumeToast, setShowResumeToast] = useState(false)
+  const [resumeToastPosition, setResumeToastPosition] = useState(0)
+  const [clearKeys, setClearKeys] = useState<Record<string, string> | undefined>(undefined)
+
+  // TSTV Catch-Up: detect catch-up mode from route state (Feature 016 / T035)
+  const [catchupManifestUrl, setCatchupManifestUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (routeState?.catchupMode && routeState.scheduleEntryId && routeState.channelId) {
+      const url = getCatchUpManifestUrl(routeState.channelId, routeState.scheduleEntryId)
+      setCatchupManifestUrl(url)
+      setPlayerMode('catchup')
+      // Fetch ClearKeys for DRM decryption
+      getClearKeys(routeState.channelId).then(res => setClearKeys(res.keys)).catch(() => {})
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // For movies/episodes, fetch title data. Skip for live TV.
   const { data: title, isLoading } = useQuery({
@@ -58,6 +85,30 @@ export default function PlayerPage() {
   const playbackInfo = useMemo(() => {
     // Live TV — data comes from route state, not title query
     if (isLive) {
+      // TSTV: When in catch-up mode, use the VOD manifest URL
+      if (playerMode === 'catchup' && catchupManifestUrl) {
+        const program = liveProgram
+        return {
+          manifestUrl: catchupManifestUrl,
+          displayTitle: program ? `${program.title} — CATCH-UP` : liveChannel?.name ?? 'Catch-Up',
+          contentType: 'movie' as const,
+          contentId: id || '',
+          nextEpisodeId: null as string | null,
+        }
+      }
+
+      // TSTV: When in start-over mode, use the EVENT manifest URL
+      if (playerMode === 'startover' && startOverManifestUrl) {
+        const program = liveProgram
+        return {
+          manifestUrl: startOverManifestUrl,
+          displayTitle: program ? `${program.title} — START OVER` : liveChannel?.name ?? 'Start Over',
+          contentType: 'movie' as const,
+          contentId: id || '',
+          nextEpisodeId: null as string | null,
+        }
+      }
+
       if (!liveChannel?.hls_live_url) {
         return { manifestUrl: '', displayTitle: liveChannel?.name ?? 'Channel temporarily unavailable', contentType: 'movie' as const, contentId: id || '', nextEpisodeId: null as string | null }
       }
@@ -118,7 +169,7 @@ export default function PlayerPage() {
     }
 
     return { manifestUrl: '', displayTitle: '', contentType: 'movie' as const, contentId: id || '', nextEpisodeId: null }
-  }, [title, type, id, isLive, liveChannel, liveProgram])
+  }, [title, type, id, isLive, liveChannel, liveProgram, playerMode, startOverManifestUrl, catchupManifestUrl])
 
   const { manifestUrl, displayTitle, contentType, contentId, nextEpisodeId } = playbackInfo
 
@@ -134,11 +185,21 @@ export default function PlayerPage() {
     wasPlayingRef.current = playerIsPlaying
   }, [playerIsPlaying, contentId, isLive, profile?.id, trackPause])
 
+  // Derive effective content type for bookmarks — use TSTV types for time-shifted modes
+  const bookmarkContentType = playerMode === 'catchup' ? 'tstv_catchup' as const
+    : playerMode === 'startover' ? 'tstv_startover' as const
+    : contentType
+
+  // For TSTV catch-up, the contentId is the schedule_entry_id
+  const bookmarkContentId = playerMode === 'catchup' && routeState?.scheduleEntryId
+    ? routeState.scheduleEntryId
+    : contentId
+
   // Fetch existing bookmark to offer resume — always fetch fresh, never serve stale cache
   const { data: existingBookmark, isLoading: bookmarkLoading } = useQuery({
-    queryKey: ['bookmark', profile?.id, contentId],
-    queryFn: () => getBookmarkByContent(profile!.id, contentId),
-    enabled: !!profile && !!contentId && contentId !== '' && !isLive,
+    queryKey: ['bookmark', profile?.id, bookmarkContentId],
+    queryFn: () => getBookmarkByContent(profile!.id, bookmarkContentId),
+    enabled: !!profile && !!bookmarkContentId && bookmarkContentId !== '' && (!isLive || playerMode === 'catchup'),
     gcTime: 0,
     staleTime: 0,
   })
@@ -149,13 +210,31 @@ export default function PlayerPage() {
     && !existingBookmark.completed
     && existingBookmark.position_seconds > 10
 
+  // For catch-up mode with a bookmark: set start position and show resume toast
+  const catchupResumeCheckedRef = useRef(false)
+  useEffect(() => {
+    if (
+      playerMode === 'catchup'
+      && existingBookmark
+      && !existingBookmark.completed
+      && existingBookmark.position_seconds > 10
+      && !catchupResumeCheckedRef.current
+    ) {
+      catchupResumeCheckedRef.current = true
+      setStartPosition(existingBookmark.position_seconds)
+      setResumeToastPosition(existingBookmark.position_seconds)
+      setShowResumeToast(true)
+      setResumePromptDismissed(true) // Skip VoD resume prompt
+    }
+  }, [playerMode, existingBookmark])
+
   // Only use the actual video duration from the player — title metadata may differ from the stream.
   const durationSeconds = videoDuration
 
   const { saveNow } = useBookmarkSync({
     profileId: profile?.id ?? '',
-    contentType,
-    contentId,
+    contentType: bookmarkContentType,
+    contentId: bookmarkContentId,
     durationSeconds,
     isPlaying: playerIsPlaying,
   })
@@ -318,11 +397,6 @@ export default function PlayerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentId, isLive, isLoading])
 
-  const handlePositionUpdate = useCallback((positionSeconds: number) => {
-    if (!title || !profile) return
-    saveNow(positionSeconds)
-  }, [title, profile, saveNow])
-
   const handleEnded = useCallback(() => {
     if (contentId && !isLive) {
       trackComplete(
@@ -381,6 +455,119 @@ export default function PlayerPage() {
 
     return () => clearTimeout(timer)
   }, [isLive, liveProgram, liveChannel])
+
+  // TSTV: Check start-over availability when tuning to a live channel (Feature 016)
+  useEffect(() => {
+    if (!isLive || !id || playerMode !== 'live') return
+    let cancelled = false
+
+    async function checkStartOver() {
+      try {
+        const availability = await getStartOverAvailability(id!)
+        if (cancelled) return
+        if (
+          availability.startover_available
+          && availability.elapsed_seconds > 180
+          && !dismissedStartOverRef.current.has(availability.schedule_entry.id)
+        ) {
+          setStartOverEntry({
+            id: availability.schedule_entry.id,
+            title: availability.schedule_entry.title,
+            elapsed: availability.elapsed_seconds,
+          })
+          setShowStartOverToast(true)
+        }
+      } catch {
+        // Silently ignore — start-over check is best-effort
+      }
+    }
+
+    checkStartOver()
+    return () => { cancelled = true }
+  }, [isLive, id, playerMode])
+
+  // TSTV: Handle start-over accept — switch to EVENT manifest
+  const handleStartOverAccept = useCallback(async () => {
+    if (!startOverEntry || !id) return
+    const manifestUrl = getStartOverManifestUrl(id, startOverEntry.id)
+    setStartOverManifestUrl(manifestUrl)
+    setPlayerMode('startover')
+    setShowStartOverToast(false)
+    // Fetch ClearKeys for DRM decryption
+    try {
+      const res = await getClearKeys(id)
+      setClearKeys(res.keys)
+    } catch { /* best-effort */ }
+  }, [startOverEntry, id])
+
+  // TSTV: Handle start-over dismiss — record so toast doesn't reappear (FR-003)
+  const handleStartOverDismiss = useCallback(() => {
+    if (startOverEntry) {
+      dismissedStartOverRef.current.add(startOverEntry.id)
+    }
+    setShowStartOverToast(false)
+  }, [startOverEntry])
+
+  // TSTV: In-player Start Over button — triggers TSTV start-over flow for live channels
+  const handlePlayerStartOver = useCallback(async () => {
+    if (!isLive || !id) return
+
+    // Already in start-over mode — seek to beginning (handled by VideoPlayer internally)
+    if (playerMode === 'startover') return
+
+    // Use cached entry if available
+    if (startOverEntry) {
+      const url = getStartOverManifestUrl(id, startOverEntry.id)
+      setStartOverManifestUrl(url)
+      setPlayerMode('startover')
+      setShowStartOverToast(false)
+      getClearKeys(id).then(res => setClearKeys(res.keys)).catch(() => {})
+      return
+    }
+
+    // Otherwise fetch availability
+    try {
+      const availability = await getStartOverAvailability(id)
+      if (availability.startover_available) {
+        const url = getStartOverManifestUrl(id, availability.schedule_entry.id)
+        setStartOverManifestUrl(url)
+        setPlayerMode('startover')
+        setStartOverEntry({
+          id: availability.schedule_entry.id,
+          title: availability.schedule_entry.title,
+          elapsed: availability.elapsed_seconds,
+        })
+        getClearKeys(id).then(res => setClearKeys(res.keys)).catch(() => {})
+      }
+    } catch {
+      // Start-over not available — no-op
+    }
+  }, [isLive, id, playerMode, startOverEntry])
+
+  // T024/T025: Jump to Live — switch back from start-over mode to live stream
+  const handleJumpToLive = useCallback(() => {
+    setStartOverManifestUrl(null)
+    setPlayerMode('live')
+    setStartPosition(undefined)
+    setClearKeys(undefined)
+  }, [])
+
+  // T027: Live-edge throttle — track if player is near live edge (within 30s)
+  const [atLiveEdge, setAtLiveEdge] = useState(false)
+  const handlePositionUpdateWithEdgeCheck = useCallback((positionSeconds: number) => {
+    // For start-over mode, check if position is near the live broadcast time
+    if (isLive && playerMode === 'startover' && liveProgramRef.current) {
+      const elapsed = (Date.now() - new Date(liveProgramRef.current.start_time).getTime()) / 1000
+      const distanceFromLive = elapsed - positionSeconds
+      setAtLiveEdge(distanceFromLive < 30)
+    } else {
+      setAtLiveEdge(false)
+    }
+    // Save bookmark for VoD and TSTV modes
+    if (profile && ((!isLive && title) || playerMode === 'catchup' || playerMode === 'startover')) {
+      saveNow(positionSeconds)
+    }
+  }, [isLive, playerMode, title, profile, saveNow])
 
   // Invalidate continue-watching cache on unmount so home page fetches fresh data.
   useEffect(() => {
@@ -568,14 +755,77 @@ export default function PlayerPage() {
       <VideoPlayer
         manifestUrl={manifestUrl}
         title={displayTitle}
-        isLive={type === 'live'}
-        onPositionUpdate={handlePositionUpdate}
+        isLive={type === 'live' && playerMode === 'live'}
+        clearKeys={clearKeys}
+
+        onPositionUpdate={handlePositionUpdateWithEdgeCheck}
         onDurationChange={setVideoDuration}
         onPlayStateChange={setPlayerIsPlaying}
         onEnded={handleEnded}
         onBack={() => navigate(-1)}
         startPosition={startPosition}
+        onStartOver={isLive && playerMode === 'live' ? handlePlayerStartOver : undefined}
       />
+
+      {/* TSTV: Player mode badge (Feature 016) */}
+      {isLive && (
+        <div className="absolute top-4 left-4 z-50">
+          {playerMode === 'catchup' ? (
+            <span className="px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-amber-500/90 text-white rounded-full">
+              Catch-Up
+            </span>
+          ) : playerMode === 'startover' ? (
+            <span className="px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-primary-500/90 text-white rounded-full">
+              Start Over
+            </span>
+          ) : (
+            <span className="px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-red-500/90 text-white rounded-full flex items-center gap-1.5">
+              <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* T024: Jump to Live button — visible only in start-over mode */}
+      {isLive && playerMode === 'startover' && (
+        <button
+          onClick={handleJumpToLive}
+          className="absolute top-4 right-4 z-50 px-4 py-2 text-sm font-medium bg-red-500/90 text-white rounded-lg hover:bg-red-400 transition-colors flex items-center gap-2"
+        >
+          <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+          Jump to Live
+        </button>
+      )}
+
+      {/* T027: At live edge indicator */}
+      {isLive && playerMode === 'startover' && atLiveEdge && (
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-black/80 text-gray-300 text-xs rounded-full">
+          At live edge
+        </div>
+      )}
+
+      {/* TSTV: Start Over toast (Feature 016) */}
+      {showStartOverToast && startOverEntry && (
+        <StartOverToast
+          programTitle={startOverEntry.title}
+          elapsedSeconds={startOverEntry.elapsed}
+          onAccept={handleStartOverAccept}
+          onDismiss={handleStartOverDismiss}
+        />
+      )}
+
+      {/* TSTV: Resume toast for catch-up mode (Feature 016 / T062) */}
+      {showResumeToast && (
+        <ResumeToast
+          positionSeconds={resumeToastPosition}
+          onRestart={() => {
+            setShowResumeToast(false)
+            setStartPosition(0)
+          }}
+          onDismiss={() => setShowResumeToast(false)}
+        />
+      )}
 
       {/* Viewing time warnings (15min / 5min / educational) */}
       <ViewingTimeWarning

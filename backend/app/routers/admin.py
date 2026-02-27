@@ -1017,3 +1017,143 @@ async def revoke_user_entitlement(
 
     await db.commit()
     await entitlement_service.invalidate_entitlement_cache(user_id, redis)
+
+
+# ---------------------------------------------------------------------------
+# T043 — SimLive Admin Endpoints (Feature 016)
+# ---------------------------------------------------------------------------
+
+from app.schemas.tstv import (
+    CleanupResult,
+    SimLiveChannelStatus,
+    TSTVRulesResponse,
+    TSTVRulesUpdate,
+)
+
+
+@router.get("/simlive/status", response_model=list[SimLiveChannelStatus])
+async def simlive_status(db: DB, user: AdminUser):
+    """Get status of all SimLive channels."""
+    from app.services.simlive_manager import SimLiveManager
+
+    # Query channels with cdn_channel_key so they always appear in the panel
+    result = await db.execute(
+        select(Channel.cdn_channel_key)
+        .where(Channel.cdn_channel_key.isnot(None))
+        .where(Channel.cdn_channel_key != "")
+        .order_by(Channel.cdn_channel_key)
+    )
+    db_keys = [row[0] for row in result.all()]
+
+    return SimLiveManager.list_all_statuses(channel_keys=db_keys if db_keys else None)
+
+
+@router.post("/simlive/{channel_key}/start")
+async def simlive_start(channel_key: str, db: DB, user: AdminUser):
+    """Start SimLive for a channel."""
+    from app.services.simlive_manager import SimLiveManager
+    from app.services import drm_service
+
+    drm_key = await drm_service.get_or_create_active_key(db, channel_key)
+    await SimLiveManager.start_channel(
+        channel_key,
+        key_id_hex=drm_key.key_id.hex,
+        key_hex=drm_key.key_value.hex(),
+    )
+    return {"status": "started", "channel_key": channel_key}
+
+
+@router.post("/simlive/{channel_key}/stop")
+async def simlive_stop(channel_key: str, user: AdminUser):
+    """Stop SimLive for a channel."""
+    from app.services.simlive_manager import SimLiveManager
+
+    await SimLiveManager.stop_channel(channel_key)
+    return {"status": "stopped", "channel_key": channel_key}
+
+
+@router.post("/simlive/{channel_key}/restart")
+async def simlive_restart(channel_key: str, db: DB, user: AdminUser):
+    """Restart SimLive for a channel."""
+    from app.services.simlive_manager import SimLiveManager
+    from app.services import drm_service
+
+    drm_key = await drm_service.get_or_create_active_key(db, channel_key)
+    await SimLiveManager.restart_channel(
+        channel_key,
+        key_id_hex=drm_key.key_id.hex,
+        key_hex=drm_key.key_value.hex(),
+    )
+    return {"status": "restarted", "channel_key": channel_key}
+
+
+@router.post("/simlive/cleanup", response_model=CleanupResult)
+async def simlive_cleanup(user: AdminUser):
+    """Clean up old segments across all channels."""
+    from app.services.simlive_manager import SimLiveManager
+
+    result = SimLiveManager.cleanup_all()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# T044 — TSTV Rules Admin Endpoints (Feature 016)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tstv/rules", response_model=list[TSTVRulesResponse])
+async def list_tstv_rules(db: DB, user: AdminUser):
+    """List TSTV rules for all channels."""
+    result = await db.execute(select(Channel).order_by(Channel.channel_number))
+    channels = result.scalars().all()
+    return [
+        TSTVRulesResponse(
+            channel_id=ch.id,
+            channel_name=ch.name,
+            tstv_enabled=ch.tstv_enabled,
+            startover_enabled=ch.startover_enabled,
+            catchup_enabled=ch.catchup_enabled,
+            cutv_window_hours=ch.cutv_window_hours,
+            catchup_window_hours=getattr(ch, "catchup_window_hours", ch.cutv_window_hours),
+        )
+        for ch in channels
+    ]
+
+
+VALID_CUTV_HOURS = {2, 6, 12, 24, 48, 72, 168}
+
+
+@router.put("/tstv/rules/{channel_id}", response_model=TSTVRulesResponse)
+async def update_tstv_rules(
+    channel_id: uuid.UUID,
+    body: TSTVRulesUpdate,
+    db: DB,
+    user: AdminUser,
+):
+    """Update TSTV rules for a channel."""
+    result = await db.execute(select(Channel).where(Channel.id == channel_id))
+    channel = result.scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    if body.cutv_window_hours is not None and body.cutv_window_hours not in VALID_CUTV_HOURS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cutv_window_hours must be one of {sorted(VALID_CUTV_HOURS)}",
+        )
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(channel, field, value)
+
+    await db.commit()
+    await db.refresh(channel)
+
+    return TSTVRulesResponse(
+        channel_id=channel.id,
+        channel_name=channel.name,
+        tstv_enabled=channel.tstv_enabled,
+        startover_enabled=channel.startover_enabled,
+        catchup_enabled=channel.catchup_enabled,
+        cutv_window_hours=channel.cutv_window_hours,
+        catchup_window_hours=getattr(channel, "catchup_window_hours", channel.cutv_window_hours),
+    )

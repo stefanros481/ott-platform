@@ -10,7 +10,7 @@ interface PendingBookmark {
 
 interface UseBookmarkSyncParams {
   profileId: string
-  contentType: 'movie' | 'episode'
+  contentType: 'movie' | 'episode' | 'tstv_catchup' | 'tstv_startover'
   contentId: string
   durationSeconds: number
   isPlaying: boolean
@@ -21,7 +21,6 @@ export function useBookmarkSync({
   contentType,
   contentId,
   durationSeconds,
-  isPlaying,
 }: UseBookmarkSyncParams): { saveNow: (positionSeconds: number) => void } {
   const positionRef = useRef(0)
   const doSaveRef = useRef<(positionSeconds: number) => void>(() => {})

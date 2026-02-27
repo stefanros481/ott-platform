@@ -14,6 +14,7 @@ import SearchPage from './pages/SearchPage'
 import WatchlistPage from './pages/WatchlistPage'
 import PausedPage from './pages/PausedPage'
 import ParentalControlsPage from './pages/ParentalControlsPage'
+import CatchUpPage from './pages/CatchUpPage'
 
 /** Layout that includes the top navigation bar and page content below it. */
 function AppLayout() {
@@ -71,6 +72,7 @@ function App() {
           <Route path="watchlist" element={<WatchlistPage />} />
           <Route path="paused" element={<PausedPage />} />
           <Route path="parental-controls" element={<ParentalControlsPage />} />
+          <Route path="catchup" element={<CatchUpPage />} />
         </Route>
 
         {/* Catch-all */}

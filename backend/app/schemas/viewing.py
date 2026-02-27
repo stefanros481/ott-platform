@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 class BookmarkUpdate(BaseModel):
     """Create or update a playback bookmark."""
 
-    content_type: str = Field(pattern=r"^(movie|episode)$", description="'movie' or 'episode'")
+    content_type: str = Field(pattern=r"^(movie|episode|tstv_catchup|tstv_startover)$", description="'movie', 'episode', 'tstv_catchup', or 'tstv_startover'")
     content_id: uuid.UUID
     position_seconds: int = Field(ge=0)
     duration_seconds: int = Field(ge=1)

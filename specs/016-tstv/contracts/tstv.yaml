@@ -1,0 +1,968 @@
+openapi: "3.1.0"
+info:
+  title: "TSTV — Start Over & Catch-Up TV API"
+  version: "1.0.0"
+  description: |
+    API contracts for Time-Shifted TV (TSTV): Start Over and Catch-Up playback,
+    admin SimLive controls, TSTV rule management, and ClearKey DRM license service.
+
+    All viewer endpoints require Bearer JWT in the Authorization header.
+    Admin endpoints require an admin-scoped JWT.
+    The DRM license endpoint accepts the JWT to verify entitlement before returning a key.
+
+tags:
+  - name: tstv-viewer
+    description: Viewer-facing TSTV endpoints (channel list, manifests, sessions)
+  - name: tstv-admin
+    description: Admin panel endpoints (SimLive control, TSTV rules)
+  - name: drm
+    description: ClearKey KMS — key provisioning and license delivery
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # Viewer — Channel Eligibility
+  # ---------------------------------------------------------------------------
+
+  /api/v1/tstv/channels:
+    get:
+      tags: [tstv-viewer]
+      summary: List channels with TSTV eligibility
+      description: >
+        Returns all channels that have `tstv_enabled=true`, including their
+        start-over and catch-up availability flags and the CUTV window.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of TSTV-eligible channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channels:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TSTVChannel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Viewer — Start Over
+  # ---------------------------------------------------------------------------
+
+  /api/v1/tstv/startover/{channel_id}:
+    get:
+      tags: [tstv-viewer]
+      summary: Get start-over availability for the current program
+      description: >
+        Returns the currently-airing schedule entry for the channel and whether
+        start-over is permitted for that program (channel flag AND per-program flag).
+        Returns 404 when no program is airing.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+      responses:
+        "200":
+          description: Current program with start-over eligibility
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartOverAvailability"
+        "404":
+          description: No program currently airing on this channel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tstv/startover/{channel_id}/manifest:
+    get:
+      tags: [tstv-viewer]
+      summary: Generate HLS EVENT manifest for start-over playback
+      description: >
+        Returns an HLS EVENT playlist anchored at `schedule_entry.start_time`.
+        Segments from `start_time` to NOW are listed as played; the playlist
+        appends new segments in real time as the broadcast continues.
+
+        Returns 403 if start-over is not enabled for this channel/program.
+        Returns 404 if the schedule entry is not found.
+
+        The manifest URL embedded in `#EXT-X-KEY` points to `/api/v1/drm/license`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+        - name: schedule_entry_id
+          in: query
+          required: true
+          description: UUID of the schedule entry to start over from
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: HLS EVENT manifest (m3u8)
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+        "403":
+          description: Start-over not permitted for this channel or program
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Schedule entry not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Viewer — Catch-Up
+  # ---------------------------------------------------------------------------
+
+  /api/v1/tstv/catchup/{channel_id}:
+    get:
+      tags: [tstv-viewer]
+      summary: List catch-up programs for a channel
+      description: >
+        Returns past schedule entries for the channel that are within the
+        channel's `cutv_window_hours` and have `catchup_eligible=true`.
+        Results are ordered by `start_time` descending (most recent first).
+        Expired programs (beyond the CUTV window) are excluded.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of available catch-up programs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  programs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CatchUpProgram"
+                  total:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tstv/catchup:
+    get:
+      tags: [tstv-viewer]
+      summary: List catch-up programs across all channels for a date
+      description: >
+        Returns catch-up-eligible programs across all TSTV-enabled channels for a
+        given date (defaults to today). Results are ordered by start_time descending.
+        Supports optional genre and channel_id filters. Implements FR-012.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: date
+          in: query
+          required: false
+          description: Date to browse (YYYY-MM-DD). Defaults to today. Must be within 7 days.
+          schema:
+            type: string
+            format: date
+        - name: channel_id
+          in: query
+          required: false
+          description: Optional channel UUID filter
+          schema:
+            type: string
+            format: uuid
+        - name: genre
+          in: query
+          required: false
+          description: Optional genre filter
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of catch-up programs across channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  programs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CatchUpProgram"
+                  total:
+                    type: integer
+                  date:
+                    type: string
+                    format: date
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tstv/catchup/{channel_id}/manifest:
+    get:
+      tags: [tstv-viewer]
+      summary: Generate HLS VOD manifest for catch-up playback
+      description: >
+        Returns an HLS VOD playlist covering the full duration of the specified
+        schedule entry. The endpoint first checks the CUTV window:
+        `NOW() < schedule_entry.end_time + channel.cutv_window_hours`. Returns
+        403 if the window has expired.
+
+        Returns 403 if catch-up is disabled for this channel or program.
+        The manifest URL embedded in `#EXT-X-KEY` points to `/api/v1/drm/license`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+        - name: schedule_entry_id
+          in: query
+          required: true
+          description: UUID of the schedule entry to watch
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: HLS VOD manifest (m3u8)
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+        "403":
+          description: Catch-up access denied — channel disabled, program ineligible, or CUTV window expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              examples:
+                windowExpired:
+                  summary: CUTV window has passed
+                  value:
+                    detail: "catch_up_window_expired"
+                    expires_at: "2026-02-17T14:30:00Z"
+                notEligible:
+                  summary: Program not eligible
+                  value:
+                    detail: "program_not_eligible"
+        "404":
+          description: Schedule entry not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Viewer — Sessions (Analytics)
+  # ---------------------------------------------------------------------------
+
+  /api/v1/tstv/sessions:
+    post:
+      tags: [tstv-viewer]
+      summary: Record a TSTV viewing session
+      description: >
+        Creates or updates a TSTV session record for analytics. Called by the
+        player when a TSTV stream is initiated. Also accepts periodic heartbeats
+        (upsert by `schedule_entry_id` + `session_type` + current session).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TSTVSessionCreate"
+      responses:
+        "201":
+          description: Session recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TSTVSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/v1/tstv/sessions/{session_id}:
+    patch:
+      tags: [tstv-viewer]
+      summary: Update playback position and completion status
+      description: >
+        Periodic heartbeat or end-of-session update. Updates `last_position_s`
+        and optionally marks the session as `completed`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TSTVSessionUpdate"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TSTVSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Admin — SimLive Control
+  # ---------------------------------------------------------------------------
+
+  /api/v1/admin/simlive/status:
+    get:
+      tags: [tstv-admin]
+      summary: Get streaming status for all channels
+      description: >
+        Returns the FFmpeg process status (running/stopped/error) for every
+        TSTV-enabled channel, along with segment count and disk usage.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Per-channel streaming status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channels:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SimLiveChannelStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/simlive/{channel_key}/start:
+    post:
+      tags: [tstv-admin]
+      summary: Start FFmpeg for a channel
+      description: >
+        Launches the FFmpeg subprocess for `channel_key`. Fetches the DRM key
+        from the KMS before starting. Returns 409 if already running.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelKey"
+      responses:
+        "200":
+          description: Channel started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLiveChannelStatus"
+        "409":
+          description: Channel is already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/simlive/{channel_key}/stop:
+    post:
+      tags: [tstv-admin]
+      summary: Stop FFmpeg for a channel
+      description: >
+        Terminates the FFmpeg subprocess for `channel_key`. Returns 409 if
+        the channel is not running.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelKey"
+      responses:
+        "200":
+          description: Channel stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLiveChannelStatus"
+        "409":
+          description: Channel is not running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/simlive/{channel_key}/restart:
+    post:
+      tags: [tstv-admin]
+      summary: Restart FFmpeg for a channel
+      description: Stop and start FFmpeg for `channel_key` in a single call.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelKey"
+      responses:
+        "200":
+          description: Channel restarted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLiveChannelStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/simlive/cleanup:
+    post:
+      tags: [tstv-admin]
+      summary: Trigger segment cleanup
+      description: >
+        Deletes segments older than each channel's `catchup_window_hours`.
+        Returns a summary of bytes freed per channel. Idempotent — safe to
+        call repeatedly (also run by cron).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Cleanup result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ---------------------------------------------------------------------------
+  # Admin — TSTV Rules
+  # ---------------------------------------------------------------------------
+
+  /api/v1/admin/tstv/rules:
+    get:
+      tags: [tstv-admin]
+      summary: List TSTV rules for all channels
+      description: Returns TSTV configuration (enabled flags + CUTV window) for every channel.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Per-channel TSTV rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channels:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TSTVRules"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/tstv/rules/{channel_id}:
+    put:
+      tags: [tstv-admin]
+      summary: Update TSTV rules for a channel
+      description: >
+        Update TSTV toggles and CUTV window for a channel. Only provided
+        fields are updated (partial update semantics despite PUT).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TSTVRulesUpdate"
+      responses:
+        "200":
+          description: Updated TSTV rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TSTVRules"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ---------------------------------------------------------------------------
+  # DRM — ClearKey KMS
+  # ---------------------------------------------------------------------------
+
+  /api/v1/drm/keys/channel/{channel_key}:
+    get:
+      tags: [drm]
+      summary: Fetch or generate the active AES-128 key for a channel
+      description: >
+        Used by `SimLiveManager` at FFmpeg startup. Returns the active key for
+        the channel. If no active key exists, generates one, stores it in
+        `drm_keys`, and returns it. Requires admin scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelKey"
+      responses:
+        "200":
+          description: Active DRM key for the channel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DRMKeyResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/drm/license:
+    post:
+      tags: [drm]
+      summary: ClearKey license endpoint
+      description: >
+        Validates the Bearer JWT and checks subscription entitlement. Returns
+        the AES-128 key in ClearKey JSON format for the requested `kid`
+        (key ID). Called by Shaka Player's EME license request.
+
+        Request body follows the W3C ClearKey license request format.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearKeyLicenseRequest"
+      responses:
+        "200":
+          description: ClearKey license response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearKeyLicenseResponse"
+        "403":
+          description: Entitlement check failed — not subscribed or session invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Key ID not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+# =============================================================================
+# Components
+# =============================================================================
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ChannelId:
+      name: channel_id
+      in: path
+      required: true
+      description: Channel UUID (primary key in `channels` table)
+      schema:
+        type: string
+        format: uuid
+
+    ChannelKey:
+      name: channel_key
+      in: path
+      required: true
+      description: CDN channel key (e.g., `ch1`, `ch2`)
+      schema:
+        type: string
+        example: ch1
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer JWT
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    Forbidden:
+      description: Insufficient permissions (admin scope required)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+
+  schemas:
+
+    # -------------------------------------------------------------------------
+    # Viewer Schemas
+    # -------------------------------------------------------------------------
+
+    TSTVChannel:
+      type: object
+      required: [id, name, cdn_channel_key, tstv_enabled, startover_enabled, catchup_enabled, cutv_window_hours]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        cdn_channel_key:
+          type: string
+          example: ch1
+        tstv_enabled:
+          type: boolean
+        startover_enabled:
+          type: boolean
+        catchup_enabled:
+          type: boolean
+        cutv_window_hours:
+          type: integer
+          example: 168
+
+    StartOverAvailability:
+      type: object
+      required: [channel_id, schedule_entry, startover_available]
+      properties:
+        channel_id:
+          type: string
+          format: uuid
+        schedule_entry:
+          $ref: "#/components/schemas/ScheduleEntrySummary"
+        startover_available:
+          type: boolean
+          description: True only if channel.startover_enabled AND schedule_entry.startover_eligible
+        elapsed_seconds:
+          type: integer
+          description: Seconds elapsed since program start (for UI prompt)
+
+    CatchUpProgram:
+      type: object
+      required: [schedule_entry, expires_at]
+      properties:
+        schedule_entry:
+          $ref: "#/components/schemas/ScheduleEntrySummary"
+        expires_at:
+          type: string
+          format: date-time
+          description: When this program leaves the CUTV window
+        bookmark_position_seconds:
+          type: integer
+          nullable: true
+          description: Resume position if the viewer has a bookmark, otherwise null
+
+    ScheduleEntrySummary:
+      type: object
+      required: [id, channel_id, title, start_time, end_time]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        synopsis:
+          type: string
+          nullable: true
+        genre:
+          type: string
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        catchup_eligible:
+          type: boolean
+        startover_eligible:
+          type: boolean
+
+    TSTVSessionCreate:
+      type: object
+      required: [channel_id, schedule_entry_id, session_type]
+      properties:
+        channel_id:
+          type: string
+          description: CDN channel key (e.g., ch1)
+        schedule_entry_id:
+          type: string
+          format: uuid
+        session_type:
+          type: string
+          enum: [startover, catchup]
+        profile_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    TSTVSessionUpdate:
+      type: object
+      properties:
+        last_position_s:
+          type: number
+          format: float
+          minimum: 0
+        completed:
+          type: boolean
+
+    TSTVSession:
+      type: object
+      required: [id, channel_id, schedule_entry_id, session_type, started_at, last_position_s, completed]
+      properties:
+        id:
+          type: integer
+        channel_id:
+          type: string
+        schedule_entry_id:
+          type: string
+          format: uuid
+        session_type:
+          type: string
+          enum: [startover, catchup]
+        started_at:
+          type: string
+          format: date-time
+        last_position_s:
+          type: number
+          format: float
+        completed:
+          type: boolean
+
+    # -------------------------------------------------------------------------
+    # Admin Schemas
+    # -------------------------------------------------------------------------
+
+    SimLiveChannelStatus:
+      type: object
+      required: [channel_key, running, segment_count]
+      properties:
+        channel_key:
+          type: string
+          example: ch1
+        running:
+          type: boolean
+        pid:
+          type: integer
+          nullable: true
+        segment_count:
+          type: integer
+          description: Number of segments currently on disk for this channel
+        disk_bytes:
+          type: integer
+          description: Total bytes used by segments for this channel
+        error:
+          type: string
+          nullable: true
+          description: Last error message if process exited unexpectedly
+
+    CleanupResult:
+      type: object
+      properties:
+        channels_processed:
+          type: integer
+        total_segments_deleted:
+          type: integer
+        total_bytes_freed:
+          type: integer
+
+    TSTVRules:
+      type: object
+      required: [channel_id, channel_name, tstv_enabled, startover_enabled, catchup_enabled, cutv_window_hours, catchup_window_hours]
+      properties:
+        channel_id:
+          type: string
+          format: uuid
+        channel_name:
+          type: string
+        tstv_enabled:
+          type: boolean
+        startover_enabled:
+          type: boolean
+        catchup_enabled:
+          type: boolean
+        cutv_window_hours:
+          type: integer
+          enum: [2, 6, 12, 24, 48, 72, 168]
+          description: Viewer entitlement window (business rule)
+        catchup_window_hours:
+          type: integer
+          description: Infrastructure retention window (for segment cleanup cron)
+
+    TSTVRulesUpdate:
+      type: object
+      description: All fields optional — only provided fields are updated
+      properties:
+        tstv_enabled:
+          type: boolean
+        startover_enabled:
+          type: boolean
+        catchup_enabled:
+          type: boolean
+        cutv_window_hours:
+          type: integer
+          enum: [2, 6, 12, 24, 48, 72, 168]
+
+    # -------------------------------------------------------------------------
+    # DRM Schemas
+    # -------------------------------------------------------------------------
+
+    DRMKeyResponse:
+      type: object
+      required: [key_id, key_value_hex, channel_key, active]
+      properties:
+        key_id:
+          type: string
+          format: uuid
+          description: ClearKey KID (used as #EXT-X-KEY KEYID attribute)
+        key_value_hex:
+          type: string
+          description: 16-byte AES-128 key as lowercase hex string (passed to FFmpeg -encryption_key)
+        channel_key:
+          type: string
+        active:
+          type: boolean
+
+    ClearKeyLicenseRequest:
+      type: object
+      description: W3C ClearKey license request format
+      required: [kids, type]
+      properties:
+        kids:
+          type: array
+          items:
+            type: string
+          description: Array of base64url-encoded key IDs requested by the player
+        type:
+          type: string
+          enum: [temporary]
+
+    ClearKeyLicenseResponse:
+      type: object
+      description: W3C ClearKey license response format
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, kid, k]
+            properties:
+              kty:
+                type: string
+                enum: [oct]
+              kid:
+                type: string
+                description: base64url-encoded key ID
+              k:
+                type: string
+                description: base64url-encoded 16-byte AES-128 key value
+
+    # -------------------------------------------------------------------------
+    # Common
+    # -------------------------------------------------------------------------
+
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          description: Machine-readable error code or human-readable message
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Present on window-expiry errors

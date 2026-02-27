@@ -23,6 +23,8 @@
 - PostgreSQL 16 — `content_packages` and `title_offers` tables (existing schema, no migration) (014-nordic-currencies)
 - Python 3.12, TypeScript 5.6, Node.js (current LTS) + No new dependencies — this is a compliance/metadata feature (015-apache-license)
 - N/A — no database changes (015-apache-license)
+- Python 3.12, TypeScript 5.x + FastAPI 0.115, SQLAlchemy 2.0, Alembic, React 18, Shaka Player 4.12, FFmpeg (system), nginx:alpine (001-tstv)
+- PostgreSQL 16 (schema changes via Alembic migration `007_tstv_schema.py`), `hls_data` Docker volume (fMP4 segments) (001-tstv)
 
 ## Recent Changes
 - 001-parental-rating-enforcement: Added Python 3.12 (backend), TypeScript 5+ (frontend) + FastAPI 0.115+, SQLAlchemy 2.0+ async, React 18, TanStack Query

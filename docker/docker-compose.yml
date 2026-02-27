@@ -45,6 +45,11 @@ services:
       CORS_ORIGINS: "http://localhost:5173,http://localhost:5174"
       EMBEDDING_MODEL: all-MiniLM-L6-v2
       LOG_LEVEL: INFO
+      HLS_SEGMENT_DIR: /hls_data
+      HLS_SOURCES_DIR: /hls_sources
+      HLS_SEGMENT_DURATION: "6"
+      CDN_BASE_URL: http://localhost:8081
+      DRM_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +58,8 @@ services:
     volumes:
       - ../backend/app:/app/app
       - huggingface_cache:/root/.cache/huggingface
+      - hls_data:/hls_data
+      - ../backend/hls_sources:/hls_sources:ro
 
   frontend-client:
     build:
@@ -80,7 +87,21 @@ services:
     volumes:
       - ../frontend-admin/src:/app/src
 
+  cdn:
+    image: nginx:alpine
+    volumes:
+      - hls_data:/usr/share/nginx/html/hls:ro
+      - ../nginx/cdn.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres_data:
   redis_data:
   huggingface_cache:
+  hls_data:

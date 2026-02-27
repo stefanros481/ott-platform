@@ -110,12 +110,22 @@ async def main(include_embeddings: bool = False) -> None:
     print(f"  Done in {elapsed:.1f}s.")
 
     # 8. Seed analytics events (Feature 001 — requires users + profiles + titles)
-    print("\n[8/8] Seeding analytics events (500–1000 synthetic events for agent demo)...")
+    print("\n[8/9] Seeding analytics events (500–1000 synthetic events for agent demo)...")
     start = time.monotonic()
     from app.seed.seed_analytics import seed_analytics
 
     async with async_session_factory() as session:
         analytics_counts = await seed_analytics(session)
+    elapsed = time.monotonic() - start
+    print(f"  Done in {elapsed:.1f}s.")
+
+    # 9. Seed TSTV data (Feature 016 — requires channels from EPG seed)
+    print("\n[9/9] Seeding TSTV data (channel keys, DRM keys)...")
+    start = time.monotonic()
+    from app.seed.seed_tstv import seed_tstv
+
+    async with async_session_factory() as session:
+        tstv_counts = await seed_tstv(session)
     elapsed = time.monotonic() - start
     print(f"  Done in {elapsed:.1f}s.")
 
@@ -132,7 +142,7 @@ async def main(include_embeddings: bool = False) -> None:
         print(f"  Done in {elapsed:.1f}s.")
 
     # Summary
-    all_counts = {**catalog_counts, **epg_counts, **user_counts, **bookmark_counts, **entitlement_counts, **analytics_counts, **embed_counts}
+    all_counts = {**catalog_counts, **epg_counts, **user_counts, **bookmark_counts, **entitlement_counts, **analytics_counts, **tstv_counts, **embed_counts}
     print("\n" + "=" * 60)
     print("  SEED SUMMARY")
     print("=" * 60)

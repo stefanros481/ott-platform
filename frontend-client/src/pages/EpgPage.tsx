@@ -6,7 +6,10 @@ import { getChannels, getSchedule, type Channel, type ScheduleEntry } from '../a
 import EpgGrid from '../components/EpgGrid'
 
 function formatDateParam(date: Date): string {
-  return date.toISOString().split('T')[0]!
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 function formatDateLabel(date: Date): string {
@@ -83,13 +86,23 @@ export default function EpgPage() {
     const start = new Date(entry.start_time)
     const end = new Date(entry.end_time)
     const isCurrentlyAiring = now >= start && now < end
+    const isPast = now > end
 
     if (isCurrentlyAiring) {
       navigate(`/play/live/${channel.id}`, {
         state: { channel, currentProgram: entry },
       })
+    } else if (isPast && entry.catchup_eligible) {
+      // Navigate to catch-up playback for eligible past programs
+      navigate(`/play/live/${channel.id}`, {
+        state: {
+          catchupMode: true,
+          scheduleEntryId: entry.id,
+          channelId: channel.id,
+        },
+      })
     } else {
-      // Show program info for past/future programs
+      // Show program info for future/ineligible programs
       setProgramInfo({ entry, channel })
     }
   }, [navigate])

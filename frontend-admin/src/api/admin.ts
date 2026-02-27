@@ -394,3 +394,70 @@ export function revokeUserEntitlement(userId: string, entitlementId: string): Pr
     method: 'DELETE',
   })
 }
+
+// ---- SimLive ----
+
+export interface SimLiveChannelStatus {
+  channel_key: string
+  running: boolean
+  pid: number | null
+  segment_count: number
+  disk_bytes: number
+  error: string | null
+}
+
+export interface CleanupResult {
+  channels_processed: number
+  total_segments_deleted: number
+  total_bytes_freed: number
+}
+
+export function getSimLiveStatus(): Promise<SimLiveChannelStatus[]> {
+  return apiFetch<SimLiveChannelStatus[]>('/admin/simlive/status')
+}
+
+export function startSimLive(channelKey: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/admin/simlive/${channelKey}/start`, { method: 'POST' })
+}
+
+export function stopSimLive(channelKey: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/admin/simlive/${channelKey}/stop`, { method: 'POST' })
+}
+
+export function restartSimLive(channelKey: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/admin/simlive/${channelKey}/restart`, { method: 'POST' })
+}
+
+export function cleanupSimLive(): Promise<CleanupResult> {
+  return apiFetch<CleanupResult>('/admin/simlive/cleanup', { method: 'POST' })
+}
+
+// ---- TSTV Rules ----
+
+export interface TSTVRules {
+  channel_id: string
+  channel_name: string
+  tstv_enabled: boolean
+  startover_enabled: boolean
+  catchup_enabled: boolean
+  cutv_window_hours: number
+  catchup_window_hours: number
+}
+
+export interface TSTVRulesUpdate {
+  tstv_enabled?: boolean
+  startover_enabled?: boolean
+  catchup_enabled?: boolean
+  cutv_window_hours?: number
+}
+
+export function getTSTVRules(): Promise<TSTVRules[]> {
+  return apiFetch<TSTVRules[]>('/admin/tstv/rules')
+}
+
+export function updateTSTVRules(channelId: string, data: TSTVRulesUpdate): Promise<TSTVRules> {
+  return apiFetch<TSTVRules>(`/admin/tstv/rules/${channelId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
