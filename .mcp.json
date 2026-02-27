@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ott-content": {
+      "command": "uv",
+      "args": ["run", "--directory", "mcp-server", "ott-mcp"]
+    }
+  }
+}
