@@ -94,6 +94,7 @@ def build_event_manifest(
         f"#EXT-X-TARGETDURATION:{segment_duration}",
         "#EXT-X-PLAYLIST-TYPE:EVENT",
         f'#EXT-X-MAP:URI="{cdn_base}/hls/{channel_key}/init.mp4"',
+        _build_ext_x_key(key_id_hex),
         "",
     ]
 
@@ -155,6 +156,7 @@ def build_vod_manifest(
         f"#EXT-X-TARGETDURATION:{segment_duration}",
         "#EXT-X-PLAYLIST-TYPE:VOD",
         f'#EXT-X-MAP:URI="{cdn_base}/hls/{channel_key}/init.mp4"',
+        _build_ext_x_key(key_id_hex),
         "",
     ]
 
