@@ -1390,8 +1390,18 @@ async def get_recording_stats(
 
 
 def main():
-    """Run the MCP server with stdio transport."""
-    mcp.run(transport="stdio")
+    """Run the MCP server.
+
+    Set MCP_TRANSPORT=sse to serve over HTTP+SSE (e.g. in Docker).
+    Defaults to stdio for local/Claude Desktop use.
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "sse":
+        host = os.environ.get("MCP_HOST", "0.0.0.0")
+        port = int(os.environ.get("MCP_PORT", "8080"))
+        mcp.run(transport="sse", host=host, port=port)
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

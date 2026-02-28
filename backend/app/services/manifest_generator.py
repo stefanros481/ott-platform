@@ -14,8 +14,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Segment filename pattern: {channel_key}-YYYYMMDDHHmmSS.m4s
-_SEGMENT_RE = re.compile(r"^(.+)-(\d{14})\.m4s$")
+# Segment filename pattern: {channel_key}-YYYYMMDDHHmmSS.ts or .m4s
+_SEGMENT_RE = re.compile(r"^(.+)-(\d{14})\.(ts|m4s)$")
 
 
 def _parse_segment_time(filename: str) -> datetime | None:
@@ -46,7 +46,7 @@ def list_segments(
 
     segments = []
     for f in seg_dir.iterdir():
-        if f.suffix != ".m4s":
+        if f.suffix not in (".ts", ".m4s"):
             continue
         ts = _parse_segment_time(f.name)
         if ts is None:
@@ -61,26 +61,25 @@ def list_segments(
     return segments
 
 
-def _build_ext_x_key(key_id_hex: str) -> str:
-    """Build #EXT-X-KEY line for ClearKey DRM."""
-    return (
-        f'#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,'
-        f'URI="/api/v1/drm/license",'
-        f'KEYFORMAT="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e",'
-        f'KEYID=0x{key_id_hex}'
-    )
+def _build_ext_x_key(channel_key: str) -> str:
+    """Build #EXT-X-KEY line for AES-128 DRM.
+
+    Points the player to the raw key endpoint which returns 16 bytes.
+    """
+    key_url = f"{settings.api_base_url}/drm/hls-key/{channel_key}"
+    return f'#EXT-X-KEY:METHOD=AES-128,URI="{key_url}"'
 
 
 def build_event_manifest(
     channel_key: str,
     start_time: datetime,
-    key_id_hex: str,
 ) -> str:
     """Build an HLS EVENT manifest for start-over playback.
 
     EVENT playlists grow in real-time: segments from program start to now
     are listed, and the playlist does NOT have #EXT-X-ENDLIST (allowing
     the player to poll for new segments as the live broadcast continues).
+    Includes #EXT-X-KEY for AES-128 decryption.
     """
     t0 = time.monotonic()
     segment_duration = settings.hls_segment_duration
@@ -90,11 +89,10 @@ def build_event_manifest(
 
     lines = [
         "#EXTM3U",
-        "#EXT-X-VERSION:7",
+        "#EXT-X-VERSION:3",
         f"#EXT-X-TARGETDURATION:{segment_duration}",
         "#EXT-X-PLAYLIST-TYPE:EVENT",
-        f'#EXT-X-MAP:URI="{cdn_base}/hls/{channel_key}/init.mp4"',
-        _build_ext_x_key(key_id_hex),
+        _build_ext_x_key(channel_key),
         "",
     ]
 
@@ -121,13 +119,12 @@ def build_vod_manifest(
     channel_key: str,
     start_time: datetime,
     end_time: datetime,
-    key_id_hex: str,
 ) -> str:
     """Build an HLS VOD manifest for catch-up playback.
 
     VOD playlists are complete: all segments from program start to end are
     listed, terminated with #EXT-X-ENDLIST. The player gets the full scrub
-    range immediately.
+    range immediately. Includes #EXT-X-KEY for AES-128 decryption.
 
     Handles schedule overruns (e.g., live sports): includes segments up to
     end_time + 30 minutes if they exist, and logs a warning.
@@ -152,11 +149,10 @@ def build_vod_manifest(
 
     lines = [
         "#EXTM3U",
-        "#EXT-X-VERSION:7",
+        "#EXT-X-VERSION:3",
         f"#EXT-X-TARGETDURATION:{segment_duration}",
         "#EXT-X-PLAYLIST-TYPE:VOD",
-        f'#EXT-X-MAP:URI="{cdn_base}/hls/{channel_key}/init.mp4"',
-        _build_ext_x_key(key_id_hex),
+        _build_ext_x_key(channel_key),
         "",
     ]
 

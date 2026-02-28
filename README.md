@@ -57,6 +57,7 @@ First build takes ~5 min (Python deps + Node deps + sentence-transformers model 
 | Admin Dashboard | http://localhost:5174 |
 | Backend API | http://localhost:8000 |
 | Swagger Docs | http://localhost:8000/docs |
+| CDN (HLS segments) | http://localhost:8081 |
 
 ## Test Users
 
@@ -98,6 +99,8 @@ Data is seeded automatically on first backend startup. To re-seed, delete the `p
 - **Frontend Client:** React 18, TypeScript, Vite, Tailwind CSS, TanStack Query, Shaka Player
 - **Frontend Admin:** React 18, TypeScript, Vite, Tailwind CSS, TanStack Query
 - **Auth:** JWT (HS256)
+- **Streaming:** HLS/fMP4 via FFmpeg (SimLive), nginx CDN for segment delivery, ClearKey DRM
+- **MCP Server:** FastMCP — read-only AI agent access to the content catalog
 - **Infra:** Docker Compose
 
 ## Architecture
@@ -106,10 +109,12 @@ Data is seeded automatically on first backend startup. To re-seed, delete the `p
 frontend-client (5173)  frontend-admin (5174)
          \                     /
           \                   /
-           +--> backend (8000) <--+
-                |          |
-           PostgreSQL    Redis
-           + pgvector
+           +--> backend (8000) <-------+
+                |          |           |
+           PostgreSQL    Redis    CDN/nginx (8081)
+           + pgvector              |
+                              hls_data volume
+                              (FFmpeg/SimLive)
 ```
 
 Single FastAPI monolith with router-based module separation:
@@ -124,6 +129,10 @@ Single FastAPI monolith with router-based module separation:
 | Admin | `/admin/titles`, `/channels`, `/schedule`, `/embeddings/generate` |
 | Analytics | `/analytics/events` (event ingestion) |
 | Content Analytics | `/content-analytics/query`, `/content-analytics/jobs/{id}` (NL query agent) |
+| TSTV | `/tstv/startover`, `/tstv/catchup`, `/tstv/sessions` (Start Over & Catch-up TV) |
+| DRM | `/drm/clearkey` (ClearKey license server) |
+
+**CDN / SimLive:** An nginx container (port 8081) serves fMP4 HLS segments from a shared `hls_data` Docker volume. FFmpeg processes (managed by `SimLiveManager`) write one simulated live stream per TSTV-enabled channel into that volume. The backend's `CDN_BASE_URL` points manifests at this CDN.
 
 ## AI Recommendations
 
@@ -146,12 +155,13 @@ curl -X POST "http://localhost:8000/api/v1/admin/embeddings/generate?regenerate=
 
 ```
 ├── backend/                 # FastAPI app (Python/uv)
-│   └── app/
-│       ├── models/          # SQLAlchemy ORM models
-│       ├── schemas/         # Pydantic request/response schemas
-│       ├── routers/         # FastAPI route handlers
-│       ├── services/        # Business logic
-│       └── seed/            # Data seeding scripts
+│   ├── app/
+│   │   ├── models/          # SQLAlchemy ORM models
+│   │   ├── schemas/         # Pydantic request/response schemas
+│   │   ├── routers/         # FastAPI route handlers
+│   │   ├── services/        # Business logic (incl. SimLiveManager)
+│   │   └── seed/            # Data seeding scripts
+│   └── hls_sources/         # Source video files for SimLive (per channel)
 ├── frontend-client/         # Viewer-facing React app
 │   └── src/
 │       ├── api/             # Typed API client
@@ -159,6 +169,11 @@ curl -X POST "http://localhost:8000/api/v1/admin/embeddings/generate?regenerate=
 │       ├── components/      # Reusable UI components
 │       └── context/         # Auth context
 ├── frontend-admin/          # Admin dashboard React app
+├── mcp-server/              # FastMCP read-only content metadata server
+│   └── src/ott_mcp/
+│       └── server.py        # Tools: catalog, EPG, analytics, TSTV, packages
+├── nginx/                   # CDN config (serves HLS segments on port 8081)
+│   └── cdn.conf
 ├── docker/                  # Docker Compose + init scripts
 ├── docs/                    # Design docs, PRDs, architecture, user stories
 └── specs/                   # Per-feature specs and validation quickstarts

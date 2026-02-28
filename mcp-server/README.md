@@ -1,6 +1,9 @@
 # OTT Content Metadata MCP Server
 
-Read-only [MCP](https://modelcontextprotocol.io/) server that exposes the OTT platform's content catalog, EPG, entitlements, and analytics to AI agents via stdio transport.
+Read-only [MCP](https://modelcontextprotocol.io/) server that exposes the OTT platform's content catalog, EPG, entitlements, and analytics to AI agents. Supports two transports:
+
+- **stdio** (default) — for local use with Claude Code and Claude Desktop
+- **HTTP + SSE** — for deployment in Docker or remote agent platforms (e.g. AgentHub)
 
 ## Prerequisites
 
@@ -19,7 +22,7 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` with your local database credentials. Use the settings below to work with the playground:
+Edit `.env` with your local database credentials and transport preference:
 
 ```env
 # Async PostgreSQL connection string (asyncpg driver required)
@@ -27,14 +30,42 @@ DATABASE_URL=postgresql+asyncpg://ott_user:ott_password@localhost:5432/ott_platf
 
 # Path to the backend package (needed for SQLAlchemy model imports)
 OTT_BACKEND_PATH=../backend
+
+# Transport: "stdio" (default) or "sse" (HTTP server)
+MCP_TRANSPORT=stdio
+MCP_HOST=0.0.0.0
+MCP_PORT=8080
 ```
 
-Then run:
+## Transport Modes
+
+### stdio (default — Claude Code / Claude Desktop)
+
+No configuration needed. The server is launched as a subprocess and communicates over stdin/stdout:
 
 ```bash
-# Run standalone (waits for stdio input)
 uv run ott-mcp
 ```
+
+`MCP_TRANSPORT` defaults to `stdio` so you don't need to set it explicitly for local use.
+
+### HTTP + SSE (Docker / remote agents)
+
+Set `MCP_TRANSPORT=sse` to run as an HTTP server. The server will listen on `MCP_HOST:MCP_PORT` and expose the standard MCP SSE endpoint at `/sse`:
+
+```bash
+MCP_TRANSPORT=sse MCP_PORT=8080 uv run ott-mcp
+```
+
+Or via `.env`:
+
+```env
+MCP_TRANSPORT=sse
+MCP_HOST=0.0.0.0
+MCP_PORT=8080
+```
+
+To connect a remote client, point it at `http://<host>:8080/sse`.
 
 ## Usage with Claude Code
 

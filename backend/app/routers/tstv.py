@@ -8,7 +8,6 @@ from fastapi.responses import Response
 
 from app.dependencies import CurrentUser, DB, OptionalVerifiedProfileId
 from app.models.epg import Channel, ScheduleEntry
-from app.models.tstv import DRMKey
 from app.models.viewing import Bookmark
 from app.schemas.tstv import (
     CatchUpByDateResponse,
@@ -138,19 +137,9 @@ async def get_startover_manifest(
     if not entry.startover_eligible:
         raise HTTPException(status_code=403, detail="Program not eligible for start-over")
 
-    # Get DRM key for manifest
-    result = await db.execute(
-        select(DRMKey).where(
-            and_(DRMKey.channel_id == channel.id, DRMKey.active.is_(True))
-        )
-    )
-    drm_key = result.scalar_one_or_none()
-    key_id_hex = drm_key.key_id.hex if drm_key else "00000000000000000000000000000000"
-
     m3u8 = manifest_generator.build_event_manifest(
         channel_key=channel.cdn_channel_key,
         start_time=entry.start_time,
-        key_id_hex=key_id_hex,
     )
 
     return Response(content=m3u8, media_type="application/vnd.apple.mpegurl")
@@ -288,20 +277,10 @@ async def get_catchup_manifest(
             headers={"X-Expires-At": expires_at.isoformat()},
         )
 
-    # Get DRM key
-    result = await db.execute(
-        select(DRMKey).where(
-            and_(DRMKey.channel_id == channel.id, DRMKey.active.is_(True))
-        )
-    )
-    drm_key = result.scalar_one_or_none()
-    key_id_hex = drm_key.key_id.hex if drm_key else "00000000000000000000000000000000"
-
     m3u8 = manifest_generator.build_vod_manifest(
         channel_key=channel.cdn_channel_key,
         start_time=entry.start_time,
         end_time=entry.end_time,
-        key_id_hex=key_id_hex,
     )
 
     return Response(content=m3u8, media_type="application/vnd.apple.mpegurl")

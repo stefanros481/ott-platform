@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     hls_sources_dir: str = "/hls_sources"
     hls_segment_duration: int = 6
     cdn_base_url: str = "http://localhost:8081"
+    api_base_url: str = "http://localhost:8000/api/v1"
 
     # DRM
     drm_enabled: bool = True

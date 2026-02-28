@@ -74,7 +74,11 @@ class SimLiveManager:
 
         segment_duration = settings.hls_segment_duration
 
-        # Build FFmpeg command for fMP4/CENC output with strftime filenames
+        # Key URL for AES-128 — player fetches raw 16-byte key from this URI
+        key_url = f"{settings.api_base_url}/drm/hls-key/{channel_key}"
+
+        # Build FFmpeg command for MPEG-TS output with AES-128-CBC encryption
+        # Note: FFmpeg HLS encryption only supports mpegts segments, not fmp4
         cmd = [
             "ffmpeg",
             "-re",  # Read at native framerate (realtime simulation)
@@ -84,13 +88,13 @@ class SimLiveManager:
             "-c:a", "copy",
             "-f", "hls",
             "-hls_time", str(segment_duration),
-            "-hls_segment_type", "fmp4",
+            "-hls_segment_type", "mpegts",
             "-hls_flags", "independent_segments+program_date_time+delete_segments",
-            "-hls_segment_filename", str(seg_dir / f"{channel_key}-%Y%m%d%H%M%S.m4s"),
+            "-hls_segment_filename", str(seg_dir / f"{channel_key}-%Y%m%d%H%M%S.ts"),
             "-strftime", "1",
-            "-encryption_scheme", "cenc-aes-ctr",
-            "-encryption_key", key_hex,
-            "-encryption_kid", key_id_hex,
+            "-hls_enc", "1",
+            "-hls_enc_key", key_hex,
+            "-hls_enc_key_url", key_url,
             "-hls_playlist_type", "event",
             str(seg_dir / "live.m3u8"),
         ]
@@ -150,7 +154,7 @@ class SimLiveManager:
         disk_bytes = 0
         if seg_dir.exists():
             for f in seg_dir.iterdir():
-                if f.suffix == ".m4s":
+                if f.suffix in (".ts", ".m4s"):
                     segment_count += 1
                     disk_bytes += f.stat().st_size
 
@@ -220,7 +224,7 @@ class SimLiveManager:
         freed = 0
 
         for f in seg_dir.iterdir():
-            if f.suffix != ".m4s":
+            if f.suffix not in (".ts", ".m4s"):
                 continue
             mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
             age_hours = (now - mtime).total_seconds() / 3600

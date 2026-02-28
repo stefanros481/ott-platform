@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import and_, select
 
 from app.dependencies import AdminUser, CurrentUser, DB
@@ -79,3 +80,20 @@ async def get_clearkeys(
     if key is None:
         return {"keys": {}}
     return {"keys": {key.key_id.hex: key.key_value.hex()}}
+
+
+@router.get("/hls-key/{channel_key}")
+async def get_hls_key(
+    channel_key: str,
+    db: DB,
+):
+    """Return raw 16-byte AES-128 key for HLS AES-128-CBC decryption.
+
+    Used as the URI in #EXT-X-KEY:METHOD=AES-128. The player fetches this
+    endpoint and receives the raw key bytes (not JSON).
+    """
+    try:
+        key = await drm_service.get_or_create_active_key(db, channel_key)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Channel key {channel_key!r} not found")
+    return Response(content=key.key_value, media_type="application/octet-stream")
